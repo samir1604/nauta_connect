@@ -20,10 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="NautaManager.Tests\" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\ConnectionManager\ConnectionManager.csproj" />
+    <ProjectReference Include="..\NautaManager\NautaManager.csproj" />
   </ItemGroup>
 </Project>

@@ -80,7 +80,7 @@ public class NautaConnection : IHttpConnection
                 async (CancellationToken token) =>
             {
                 using var request = new HttpRequestMessage(HttpMethod.Post, url);
-                request.Content = new FormUrlEncodedContent(data);
+                request.Content = new FormUrlEncodedContent(data);                
                 configureRequest?.Invoke(request);
 
                 return await _httpClient.SendAsync(request, token);
