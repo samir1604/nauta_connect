@@ -4,6 +4,7 @@ using ConnectionManager.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using NautaManager;
+using NautaManager.Contracts;
 using System.Net;
 using System.Net.Http;
 
@@ -11,7 +12,7 @@ var builder = Host.CreateApplicationBuilder();
 
 var cookieContainer = new CookieContainer();
 builder.Services.AddSingleton(cookieContainer);
-builder.Services.AddHttpClient<IHttpConnection, NautaConnection>(client =>
+builder.Services.AddHttpClient<IHttpConnection, HttpConnection>(client =>
 {
     client.BaseAddress = new Uri("https://secure.etecsa.net:8443/");
     client.Timeout = TimeSpan.FromSeconds(15);
@@ -34,6 +35,7 @@ builder.Services.AddHttpClient<IHttpConnection, NautaConnection>(client =>
     }
 });
 builder.Services.AddSingleton<NautaService>();
+builder.Services.AddSingleton<IDataParser, NautaDataParser>();
 
 using IHost host = builder.Build();
 
