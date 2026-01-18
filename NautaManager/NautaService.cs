@@ -1,22 +1,16 @@
-﻿using ConnectionManager;
-using ConnectionManager.Contracts;
+﻿using ConnectionManager.Contracts;
+using ConnectionManager.DTO;
 using HtmlAgilityPack;
 using NautaManager.Contracts;
-using System;
-using System.Buffers.Text;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net;
-using System.Runtime.Serialization.Formatters;
-using System.Text;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 
 namespace NautaManager;
 
 public class NautaService : INautaService
 {
     private readonly IHttpConnection _connection;
+    private readonly IDataParser _dataParser;
     private Dictionary<string, string> _sessionFields = [];
 
     public event Action<string>? OnStatusMessageChanged;
@@ -25,101 +19,218 @@ public class NautaService : INautaService
     public event Action<TimeSpan>?   OnTimeRemainingUpdated;
     public event Action<bool>? OnConnectionStateChanged;
 
-    private const string csrfhw = "CSRFHW";
-
-    //private static readonly string[] _fieldsToFind = ["CSRFHW", "wlanuserip", "loggerId"];
-    //private const string _baseUrl = "https://secure.etecsa.net:8443/";        
-
-    public NautaService(IHttpConnection connection)
+    public NautaService(
+        IHttpConnection connection, IDataParser dataParser)
     {
-        _connection = connection;        
-        _connection.OnRetryOccurred += _connection_OnRetryOccurred;
+        _connection = connection;   
+        _dataParser = dataParser;
+        _connection.OnRetryOccurred += Connection_OnRetryOccurred;
     }   
 
     public async Task<bool> IsPortalAvailableAsync(CancellationToken ct = default)
     {
-        var response = await _connection.Get("/", null, ct);
-        if (response.Status == 200 && response.FormFields.ContainsKey("CSRFHW"))
-        {
-            _sessionFields = response.FormFields;
-            return true;
-        }
+        _sessionFields.Clear();
 
+        ShowStatusMessage("Verificando acceso al portal de ETECSA");
+
+        var response = await _connection.Get(url:"/", ct: ct);
+
+        if(response.IsSuccess && 
+            !string.IsNullOrEmpty(response.RawContent))        
+            _sessionFields = _dataParser.ParseSessionFieldFromForm(response.RawContent);            
+
+        if (_sessionFields.ContainsKey(NautaServiceKeys.CSRFHWKey)) return true;
+        
+        ShowStatusMessage("No se detecto el portal de ETECSA");
         return false;
-    }
+    }    
 
     public async Task<bool> LoginAsync(
         string username, string password, CancellationToken ct = default)
-    {
-        OnStatusChanged?.Invoke("Iniciando sesión...");
-
-        if (_sessionFields.Count == 0)
-        {
-            var isAvaliable = await IsPortalAvailableAsync(ct);
-            if(!isAvaliable)
-            {
-                OnErrorOccurred?.Invoke("No se pudo conectar con el portal de ETECSA.");                
-                return false;
-            }            
-        }
+    {   
+        if (_sessionFields.Count == 0 && !await IsPortalAvailableAsync(ct)) return false;
         
-        var loginData = new Dictionary<string, string>(_sessionFields);
-        loginData["username"] = username;
-        loginData["password"] = password;
-        
-        var response = await _connection.Post("/LoginServlet", loginData, null, ct);
+        var loginData = CreateLoginDataRequest(username, password, _sessionFields);
 
-        if (response.Status == 302 && response.UrlRedirect.Contains("online.do"))
+        ShowStatusMessage("Iniciando sesión...");
+
+        var response = await _connection.Post(
+            "/LoginServlet",
+            new FormContent(loginData),
+            cfg =>
+            {                
+                cfg.SetReferer("https://secure.etecsa.net:8443/");
+                cfg.AddHeader("Origin", "https://secure.etecsa.net:8443");
+            }, ct);
+
+        if (response.IsSuccess && response.UrlRedirect.Contains("online.do")) 
         {
-            _sessionFields = response.FormFields;
-            _sessionFields[csrfhw] = ExtractCsrfFromUrl(response.UrlRedirect) ?? _sessionFields[csrfhw];
-            _sessionFields["ATTRIBUTE_UUID"] = ExtractUuidFromText(response.Response);
-
-            OnStatusChanged?.Invoke("¡Conectado!");
-            OnConnectionStateChanged?.Invoke(true);
+            _sessionFields[NautaServiceKeys.USERNAMEKey] = username;
+            UpdateSessionFromJavascript(response.RawContent);
+            ShowStatusMessage("Conectado!");
+            ChangeConnectionState(true);
             return true;
         }
 
-        var alertError = ExtractAlertMessage(response.Response);
-        OnErrorOccurred?.Invoke(alertError ?? "No se pudo completar el inicio de sesión. Inténtelo de nuevo.") ;        
+        var alertError = _dataParser.ExtractAlertMessageFromJs(
+                response.RawContent) 
+                    ?? "Credenciales incorrectas";
+
+        ShowErrorMessage(alertError);
         return false;
     }
 
-    private string? ExtractAlertMessage(string html)
-    {
-        var doc = new HtmlDocument();
-        doc.LoadHtml(html);
-        
-        var scriptNodes = doc.DocumentNode.SelectNodes("//script");
-
-        if (scriptNodes != null)
+    public async Task UpdateRemainingTimeAsync(CancellationToken ct = default)
+    {        
+        if (!_sessionFields.ContainsKey(NautaServiceKeys.ATTRIBUTE_UUIDKey) || 
+            !_sessionFields.ContainsKey(NautaServiceKeys.USERNAMEKey))
         {
-            foreach (var node in scriptNodes)
-            {
-                string scriptContent = node.InnerText;
-                var match = Regex.Match(scriptContent, @"alert\s*\(\s*['""](?<message>.*?)['""]\s*\)", RegexOptions.Singleline);
-
-                if (match.Success) return match.Groups["message"].Value;
-                
-            }
+            ShowErrorMessage("No hay una sesión activa para consultar el tiempo.");
+            return;
         }
 
-        return null; // No se encontró ningún alert real en código JS
+        var queryData = CreateRemainingTimeDataRequest(_sessionFields);
+        
+        var response = await _connection.Post(
+            url: "/EtecsaQueryServlet",
+            data: new FormContent(queryData),
+            config: cfg =>
+            {                
+                string currentCsrf = _sessionFields.GetValueOrDefault(NautaServiceKeys.CSRFHWKey, "");
+                cfg.SetReferer($"https://secure.etecsa.net:8443/web/online.do?CSRFHW={currentCsrf}&");
+                cfg.AddHeader("Origin", "https://secure.etecsa.net:8443");
+                cfg.AddHeader("Accept", "*/*");
+            }, ct);
+        
+        if (response.IsSuccess && 
+            ProcessRemainginTimeResponse(response.RawContent) is TimeSpan remaining)
+        {   
+                ShowRemaining(remaining);
+        } else
+        {
+            _sessionFields.Clear();
+            ShowErrorMessage("La sesión ha expirado por inactividad.");
+            ChangeConnectionState(false);
+        }
     }
 
-    private string? ExtractCsrfFromUrl(string url)
+    private TimeSpan? ProcessRemainginTimeResponse(string? rawContent)
     {
-        var match = Regex.Match(url, @"CSRFHW=([^&]*)");
-        return match.Success ? match.Groups[1].Value : null;
+        if(rawContent != null &&
+            _dataParser.TryParseConnectionTime(
+                rawContent.Trim(), out TimeSpan remaining)) {
+            return remaining; 
+        }
+        
+        return null;        
     }
 
-    private string ExtractUuidFromText(string html)
+    public async Task LogoutAsync(CancellationToken ct = default)
     {
-        var match = Regex.Match(html, @"ATTRIBUTE_UUID=([A-Z0-9]+)");
-        return match.Success ? match.Groups[1].Value : string.Empty;
+        if (!_sessionFields.ContainsKey(NautaServiceKeys.ATTRIBUTE_UUIDKey) &&
+            !_sessionFields.ContainsKey(NautaServiceKeys.USERNAMEKey))
+        {
+            return;
+        }
+
+        ShowStatusMessage("Cerrando sesión...");
+        
+        var logoutData = CreateLogoOutDataRequest(_sessionFields);
+                
+        var response = await _connection.Post(
+            url: "/LogoutServlet",
+            data: new FormContent(logoutData),
+            config: cfg =>
+            {
+                string currentCsrf = _sessionFields.GetValueOrDefault(NautaServiceKeys.CSRFHWKey, "");
+                cfg.SetReferer($"https://secure.etecsa.net:8443/web/online.do?CSRFHW={currentCsrf}&");
+                cfg.AddHeader("Origin", "https://secure.etecsa.net:8443");
+            }, ct);
+        
+        if (response.IsSuccess && (response.RawContent?.Contains("SUCCESS") ?? false))
+        {
+            _sessionFields.Clear();
+            ShowStatusMessage("Sesión cerrada.");
+            ChangeConnectionState(false);
+        }
+        else
+        {
+            ShowErrorMessage("Error al cerrar sesión. Intente de nuevo.");
+        }
     }
 
-    private void _connection_OnRetryOccurred(
+    private static Dictionary<string, string> CreateLogoOutDataRequest(
+        Dictionary<string, string> actualSessionsFields) => new()
+        {
+            { NautaServiceKeys.ATTRIBUTE_UUIDKey, actualSessionsFields.GetValueOrDefault(NautaServiceKeys.ATTRIBUTE_UUIDKey, "")},
+            { NautaServiceKeys.CSRFHWKey, actualSessionsFields.GetValueOrDefault(NautaServiceKeys.CSRFHWKey, "") },
+            { NautaServiceKeys.WLANUSERIPKey, actualSessionsFields.GetValueOrDefault(NautaServiceKeys.WLANUSERIPKey, "") },
+            { NautaServiceKeys.LOGGERIDKey, actualSessionsFields.GetValueOrDefault(NautaServiceKeys.LOGGERIDKey, "") },
+            { NautaServiceKeys.USERNAMEKey, actualSessionsFields.GetValueOrDefault(NautaServiceKeys.USERNAMEKey, "") },            
+            { NautaServiceKeys.SSIDKey, "" },
+            { NautaServiceKeys.DOMAINKey, "" },
+            { NautaServiceKeys.WLANACNAMEKey, "" },
+            { NautaServiceKeys.WLANMACKey, "" },
+            { "remove", "1" },
+        };
+    
+
+    private static Dictionary<string, string> CreateRemainingTimeDataRequest(
+        Dictionary<string, string> actualSessionFields) => new()
+        {
+            { NautaServiceKeys.OPKey, "getLeftTime" },
+            { NautaServiceKeys.ATTRIBUTE_UUIDKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.ATTRIBUTE_UUIDKey, "") },
+            { NautaServiceKeys.CSRFHWKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.CSRFHWKey, "") },
+            { NautaServiceKeys.WLANUSERIPKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.WLANUSERIPKey, "") },
+            { NautaServiceKeys.LOGGERIDKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.LOGGERIDKey, "") },
+            { NautaServiceKeys.USERNAMEKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.USERNAMEKey, "") },
+            { NautaServiceKeys.SSIDKey, "" },
+            { NautaServiceKeys.DOMAINKey, "" },
+            { NautaServiceKeys.WLANACNAMEKey, "" },
+            { NautaServiceKeys.WLANMACKey, "" }
+        };
+
+    private static Dictionary<string, string> CreateLoginDataRequest(
+        string user, 
+        string password, 
+        Dictionary<string, string> actualSessionFields) => new()
+        {
+            { NautaServiceKeys.WLANUSERIPKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.WLANUSERIPKey, "") },
+            { NautaServiceKeys.WLANACNAMEKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.WLANACNAMEKey, "") },
+            { NautaServiceKeys.WLANMACKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.WLANMACKey, "") },
+            { NautaServiceKeys.FIRSTURLKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.FIRSTURLKey, "") },
+            { NautaServiceKeys.SSIDKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.SSIDKey, "") },
+            { NautaServiceKeys.USERTYPEKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.USERTYPEKey, "") },
+            { NautaServiceKeys.GOTOPAGEKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.GOTOPAGEKey, "") },
+            { NautaServiceKeys.SUCCESSPAGEKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.SUCCESSPAGEKey, "") },
+            { NautaServiceKeys.LOGGERIDKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.LOGGERIDKey, "") },
+            { NautaServiceKeys.LANGKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.LANGKey, "") },
+            { NautaServiceKeys.CSRFHWKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.CSRFHWKey, "") },
+            { NautaServiceKeys.USERNAMEKey, user },
+            { NautaServiceKeys.PASSWORDKey, password },
+        };
+    
+
+    private void UpdateSessionFromJavascript(string rawContent)
+    {    
+        var fields = _dataParser.ParseSessionFieldFromJs(rawContent);
+
+        foreach (var (clave, valor) in fields)        
+            _sessionFields[clave] = valor;
+    }    
+
+    private void ShowStatusMessage(string message) =>
+        OnStatusMessageChanged?.Invoke(message);
+    private void ChangeConnectionState(bool state) => 
+        OnConnectionStateChanged?.Invoke(state);
+
+    private void ShowErrorMessage(string msg) =>
+        OnErrorOccurred?.Invoke(msg);          
+
+    private void ShowRemaining(TimeSpan remaining) =>
+        OnTimeRemainingUpdated?.Invoke(remaining);
+
+    private void Connection_OnRetryOccurred(
         string message, 
         int statusCode, 
         int retryCount, 
@@ -127,70 +238,5 @@ public class NautaService : INautaService
         TimeSpan delay)
     {
         OnStatusMessageChanged?.Invoke($"[Reintento {retryLeft}]/{retryCount}");
-    }
-
-    public async Task<bool> IsConnectionAvailableAsync(CancellationToken ct =default)
-    {
-        OnStatusMessageChanged?.Invoke("Verificando acceso al portal...");
-        var response = await _connection.Get("/", null, ct);
-        if (response.Status == 200 && response.FormFields.ContainsKey(csrfhw))
-        {
-            OnStatusMessageChanged?.Invoke("Portal detectado correctamente.");
-            return true;
-        }
-        OnStatusMessageChanged?.Invoke("No se detectó el portal de ETECSA.");
-        return false;
-    }
-
-    public async Task<Dictionary<string, string>> GetInitialData() 
-    {
-        throw new NotImplementedException();
-    }
-
-    public async Task<bool>  Login(string user, string pass, Dictionary<string, string> initialData)
-    {
-        /*
-         * var formData = new Dictionary<string, string>
-            {
-                { "wlanuserip", initialData["wlanuserip"] },
-                { "wlanacname", "" },
-                { "wlanmac", "" },
-                { "firsturl", "notFound.jsp" },
-                { "ssid", "" },
-                { "usertype", "" },
-                { "gotopage", "/nauta_etecsa/LoginURL/pc_login.jsp" },
-                { "successpage", "/nauta_etecsa/OnlineURL/pc_index.jsp" },
-                { "loggerId", initialData["loggerId"] },
-                { "lang", "es_ES" },
-                { "username", user },
-                { "password", pass },
-                { "CSRFHW", initialData["CSRFHW"] }
-            };
-         */
-        throw new NotImplementedException();
-    }
-
-    public void GetRemainingTime()
-    {
-
-    }
-
-    public async Task Logout(string username, Dictionary<string, string> sessionData)
-    {
-        throw new NotImplementedException();
-    }
-
-    
-
-    
-
-    public Task LogoutAsync(CancellationToken ct = default)
-    {
-        throw new NotImplementedException();
-    }
-
-    public Task UpdateRemainingTimeAsync(CancellationToken ct = default)
-    {
-        throw new NotImplementedException();
-    }
+    } 
 }

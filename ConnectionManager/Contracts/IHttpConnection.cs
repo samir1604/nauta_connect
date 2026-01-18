@@ -1,10 +1,4 @@
 ﻿using ConnectionManager.DTO;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net.Http.Headers;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace ConnectionManager.Contracts
 {
@@ -14,13 +8,13 @@ namespace ConnectionManager.Contracts
 
         Task<HttpResponse> Get(
             string url,
-            Action<HttpRequestMessage>? configureRequest = null,
+            Action<IRequestConfiguration>? config = null,
             CancellationToken ct = default);
 
         Task<HttpResponse> Post(
             string url,
-            Dictionary<string, string> data,
-            Action<HttpRequestMessage>? configureRequest = null,
+            IRequestContent? data = null,
+            Action<IRequestConfiguration>? config = null,
             CancellationToken ct = default);
     }
 }
