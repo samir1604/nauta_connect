@@ -109,7 +109,7 @@ public class NautaService : INautaService
             {
                 _sessionFields.Clear();                
                 ChangeConnectionState(false);
-                ShowErrorMessage("La sesión ha expirado por inactividad.");
+                ShowErrorMessage(failure.Message);
             });
     }
 

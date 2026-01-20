@@ -1,5 +1,6 @@
 ﻿using ConnectionManager.Contracts;
 using ConnectionManager.DTO;
+using ConnectionManager.Result;
 using Moq;
 using Moq.Language.Flow;
 using Moq.Protected;
@@ -36,11 +37,10 @@ public class NautaServiceTests
             <input type='hidden' name='loggerId' value='20260113145204186' />
         </form>";
 
-        SetupMockGetResponse(() => new HttpResponse 
-        { 
-            Status = 200, 
+        SetupMockGetResponse(() => Result.Success(new HttpResponse 
+        {   
             RawContent = html 
-        });
+        }));
 
         // Act
         var result = await _sut.IsPortalAvailableAsync();
@@ -50,24 +50,19 @@ public class NautaServiceTests
     }
 
     [Theory]
-    [InlineData("<html><script>alert('Su cuenta no tiene saldo');</script></html>", "Su cuenta no tiene saldo")]
-    [InlineData("<html><script>alert('Usuario o contraseña incorrecta');</script></html>", "Usuario o contraseña incorrecta")]
+    [InlineData("saldo")]
+    [InlineData("incorrecta")]
     public async Task LoginAsync_ShouldReturnFalse_AndShowAlertMessage_OnFailedLogin(
-        string htmlResponse, string expectedAlert)
+         string expectedAlert)
     {
         // Arrange                
-        SetupMockGetResponse(() => new HttpResponse
-        {
-            Status = 200,
+        SetupMockGetResponse(() => Result.Success(new HttpResponse
+        {            
             RawContent = "<input type='hidden' name='CSRFHW' value='123'/>"
-        });
-                
-        SetupMockPostResponse(() => new HttpResponse
-        {
-            Status = 200,
-            RawContent = htmlResponse,
-            UrlRedirect = "/LoginServlet"
-        });
+        }));
+
+        SetupMockPostResponse(() => Result<HttpResponse>.Failure(
+            new Failure(ErrorType.InvalidCredentials, expectedAlert)));        
 
         string? capturedError = null;
         _sut.OnErrorOccurred += (msg) => capturedError = msg;
@@ -76,7 +71,7 @@ public class NautaServiceTests
         var result = await _sut.LoginAsync("user", "pass");
 
         // Assert
-        Assert.False(result);
+        Assert.False(result);        
         Assert.Equal(expectedAlert, capturedError);
     }    
 
@@ -84,20 +79,18 @@ public class NautaServiceTests
     public async Task LoginAsync_ShouldReturnTrue_AndUpdateSessionFields_OnSuccess()
     {
         // Arrange
-        SetupMockGetResponse(() => new HttpResponse
-        {
-            Status = 200,
+        SetupMockGetResponse(() => Result.Success(new HttpResponse
+        {            
             RawContent = "<input type='hidden' name='CSRFHW' value='inicial'/>"
-        });
+        }));
 
         // Simular respuesta desde online.do
         var successHtml = "var urlParam = 'ATTRIBUTE_UUID=UUID123&CSRFHW=token456&loggerId=log789';";
-        SetupMockPostResponse(() => new HttpResponse
-        {
-            Status = 200,
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
+        {            
             RawContent = successHtml,
             UrlRedirect = "https://secure.etecsa.net:8443/online.do"
-        });        
+        }));        
 
         bool stateChanged = false;
         _sut.OnConnectionStateChanged += (state) => stateChanged = state;
@@ -114,18 +107,16 @@ public class NautaServiceTests
     public async Task LoginAsync_ShouldTryToAvailablePortal_IfSessionFieldsAreEmpty()
     {
         // Arrange: El Get devuelve éxito para que el Login pueda continuar
-        SetupMockGetResponse(() => new HttpResponse
-        {
-            Status = 200,
+        SetupMockGetResponse(() => Result.Success(new HttpResponse
+        {            
             RawContent = "<input type='hidden' name='CSRFHW' value='123'/>"
-        });
+        }));
         
-        SetupMockPostResponse(() => new HttpResponse
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
         {
-            Status = 200,
             RawContent = "online.do",
             UrlRedirect = "online.do"
-        });
+        }));
         
         // Act
         await _sut.LoginAsync("user", "pass");
@@ -146,11 +137,10 @@ public class NautaServiceTests
         var cts = new CancellationTokenSource();
         cts.Cancel(); // Simulamos cancelación inmediata
 
-        SetupMockGetResponse(() => new HttpResponse 
+        SetupMockGetResponse(() => Result.Success(new HttpResponse 
         {
-            Status = 499,
-            Message = "Operación cancelada"
-        }, cts.Token);
+            RawContent = "Cancelada"
+        }), cts.Token);
         
         // Act
         var result = await _sut.IsPortalAvailableAsync(cts.Token);
@@ -165,27 +155,24 @@ public class NautaServiceTests
         // --- ARRANGE ---
         PrePopulateSessionAsync(_sut);
         
-        SetupMockGetResponse(() => new HttpResponse
-        {
-            Status = 200,
+        SetupMockGetResponse(() => Result.Success(new HttpResponse
+        {            
             RawContent = "<input type='hidden' name='CSRFHW' value='123'/>"
-        });
+        }));
 
-        SetupMockPostResponse(()=> new HttpResponse
-        {
-            Status = 200,
+        SetupMockPostResponse(()=> Result.Success(new HttpResponse
+        {            
             RawContent = "ATTRIBUTE_UUID=UUID123&username=user@nauta.com.cu",
             UrlRedirect = "online.do"
-        }, "/LoginServlet");
+        }), "/LoginServlet");
         
         // Mock de la respuesta del tiempo
         var expectedTime = new TimeSpan(38, 3, 59);
 
-        SetupMockPostResponse(() => new HttpResponse
-        {
-            Status = 200,
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
+        {            
             RawContent = "38:03:59"
-        }, "/EtecsaQueryServlet");
+        }), "/EtecsaQueryServlet");
         
         TimeSpan capturedTime = TimeSpan.Zero;
         _sut.OnTimeRemainingUpdated += (time) => capturedTime = time;
@@ -205,11 +192,10 @@ public class NautaServiceTests
         // Simulamos sesión activa
         PrePopulateSessionAsync(_sut);
 
-        SetupMockPostResponse(() => new HttpResponse
-        {
-            Status = 200,
-            RawContent = "errorop"
-        }, "/EtecsaQueryServlet");        
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
+        {            
+            RawContent = ""
+        }), "/EtecsaQueryServlet");        
 
         string? errorMessage = null;
         _sut.OnErrorOccurred += (msg) => errorMessage = msg;
@@ -218,7 +204,7 @@ public class NautaServiceTests
         await _sut.UpdateRemainingTimeAsync();
 
         // --- ASSERT ---
-        Assert.Contains("tiempo", errorMessage);
+        Assert.Contains("expirado", errorMessage);
     }
 
     [Fact]
@@ -247,11 +233,10 @@ public class NautaServiceTests
         // Llenamos el diccionario con los datos de prueba
         PrePopulateSessionAsync(_sut);
 
-        SetupMockPostResponse(() => new HttpResponse
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
         {
-            Status = 200,
             RawContent = "01:00:00"
-        });
+        }));
 
         // --- ACT ---
         await _sut.UpdateRemainingTimeAsync();
@@ -271,11 +256,10 @@ public class NautaServiceTests
         // --- ARRANGE ---        
         PrePopulateSessionAsync(_sut);
         
-        SetupMockPostResponse(() => new HttpResponse
-        {
-            Status = 200,
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
+        {            
             RawContent = "SUCCESS" // Lo que esperamos ver según el JS
-        }, "/LogoutServlet");
+        }), "/LogoutServlet");
 
         bool stateChangedCalled = false;
         _sut.OnConnectionStateChanged += (state) => stateChangedCalled = !state;
@@ -298,11 +282,11 @@ public class NautaServiceTests
     }
 
     private IReturnsResult<IHttpConnection> SetupMockPostResponse(
-        Func<HttpResponse> response, string? url = null)
+        Func<Result<HttpResponse>> response, string? url = null)
     {
         if (url == null)
         {
-            return _connectionMock.Setup(c =>
+            return _connectionMock.Setup(c => 
             c.Post(                
                 It.IsAny<string>(),
                 It.IsAny<IRequestContent>(),
@@ -321,7 +305,7 @@ public class NautaServiceTests
     }
 
     private IReturnsResult<IHttpConnection> SetupMockGetResponse(
-        Func<HttpResponse> response, CancellationToken ct = default)
+        Func<Result<HttpResponse>> response, CancellationToken ct = default)
     {        
         return _connectionMock.Setup(c =>
             c.Get(

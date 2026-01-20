@@ -1,6 +1,4 @@
-﻿using System.Threading.Tasks;
-
-namespace ConnectionManager.Result;
+﻿namespace ConnectionManager.Result;
 
 public static class ResultExtension
 {

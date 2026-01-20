@@ -21,14 +21,10 @@ public class Result<T> : Result
         : throw new InvalidOperationException(
             "No se puede acceder al valor de un resultado fallido.");
 
-    protected internal Result(T value) : base(true) => 
-        _value = value;
-    protected internal Result(Failure error) : base(false, error) => 
-        _value = default;
-    public static Result<T> Success(T value) => 
-        new(Result<T>.Success(value).Value);
-    public new static Result<T> Failure(Failure error) => 
-        new(error);
+    internal Result(T value) : base(true) => _value = value;
+    internal Result(Failure error) : base(false, error) => _value = default;
+    public static Result<T> Success(T value) => new(value);
+    public new static Result<T> Failure(Failure error) => new(error);
 }
 
 public class Result

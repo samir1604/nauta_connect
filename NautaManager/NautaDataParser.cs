@@ -15,7 +15,7 @@ public class NautaDataParser : IDataParser
         htmlDoc.LoadHtml(html);
 
         var nodes = htmlDoc.DocumentNode.SelectNodes($"//input[@type='hidden' and @name]");
-        if (nodes == null) 
+        if (nodes == null)
             return Result<Dictionary<string, string>>.Failure(
                 new Failure(ErrorType.ParserError, "Datos insuci"));
 
@@ -28,7 +28,7 @@ public class NautaDataParser : IDataParser
                 if (!string.IsNullOrEmpty(name))
                     fields.Add(name, value);
             }
-        }        
+        }
 
         return Result.Success(fields);
     }
@@ -36,7 +36,7 @@ public class NautaDataParser : IDataParser
     public Result<Dictionary<string, string>> ParseSessionFieldFromJs(string html)
     {
         return IsDocumentCleanFromJsAlert(html)
-            .Bind(() => ExtractSessionFields(html)); 
+            .Bind(() => ExtractSessionFields(html));
     }
 
     private static Result<Dictionary<string, string>> ExtractSessionFields(string html)
@@ -78,15 +78,22 @@ public class NautaDataParser : IDataParser
                 if (match.Success)
                 {
                     var alertContent = match.Groups["message"].Value;
-                    var errorType =  alertContent.Contains("saldo") ? ErrorType.NoBalance :
-                        alertContent.Contains("usuario") ? ErrorType.InvalidCredentials : ErrorType.UnexpectedResponse;
+                    var errorType = MapAlertToErrorType(alertContent);
                     return Result.Failure(new Failure(errorType, alertContent));
                 }
             }
         }
-        
+
         return Result.Success();
     }
+
+    private static ErrorType MapAlertToErrorType(string content) =>
+        content switch
+        {
+            "saldo" => ErrorType.NoBalance,
+            "usuario" => ErrorType.InvalidCredentials,
+            _ => ErrorType.UnexpectedResponse
+        };
 
     public bool TryParseConnectionTime(string timeStr, out TimeSpan interval)
     {

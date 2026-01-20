@@ -1,9 +1,4 @@
 ﻿using NautaManager;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace NautaConnect.Tests.NautaManager.Tests;
 
@@ -38,19 +33,20 @@ public class NautaDataParserTest
 
         // --- ACT ---
         var result = parser.ParseSessionFieldFromForm(htmlContent);
+        var value = result.Value;
 
         // --- ASSERT ---
         // Verificamos que solo capturó los 11 campos 'hidden'
         // Ignorando el 'username' (text) y el 'Enviar' (button)
-        Assert.Equal(11, result.Count);
+        Assert.Equal(11, result.Value.Count);
 
         // Verificaciones de valores clave
-        Assert.Equal("10.227.108.183", result["wlanuserip"]);
-        Assert.Equal("20260114155929643", result["loggerId"]);
-        Assert.Equal("a54c4e25938d36457d64c31db31d7d23", result["CSRFHW"]);
+        Assert.Equal("10.227.108.183", value["wlanuserip"]);
+        Assert.Equal("20260114155929643", value["loggerId"]);
+        Assert.Equal("a54c4e25938d36457d64c31db31d7d23", value["CSRFHW"]);
 
         // Verificamos que NO capturó el botón Enviar aunque tenga name
-        Assert.False(result.ContainsKey("Enviar"));
+        Assert.False(value.ContainsKey("Enviar"));
     }
 
     [Fact]
@@ -61,23 +57,25 @@ public class NautaDataParserTest
 
         // ACT
         var result = _sut.ParseSessionFieldFromJs(jsContent);
+        var value = result.Value;
 
         // ASSERT
-        Assert.Equal("ABC123", result["ATTRIBUTE_UUID"]);
-        Assert.Equal("token456", result["CSRFHW"]);
-        Assert.Equal("log789", result["loggerId"]);
+        Assert.Equal("ABC123", value["ATTRIBUTE_UUID"]);
+        Assert.Equal("token456", value["CSRFHW"]);
+        Assert.Equal("log789", value["loggerId"]);
     }
 
     [Theory]
-    [InlineData("<script>alert('Error 1');</script>", "Error 1")]
+    [InlineData("<script>alert('Error 1');</script>", "Error1")]
     [InlineData("<script>alert(\"Error 2\");</script>", "Error 2")]
     public void ExtractAlertMessage_ShouldWork_WithDifferentQuotes(string html, string expected)
     {
         // ACT
-        var result = NautaDataParser.IsDocumentCleanFromJsAlert(html);
+        var result = _sut.IsDocumentCleanFromJsAlert(html);
 
         // ASSERT
-        Assert.Equal(expected, result);
+        Assert.True(result.IsFailure);   
+        Assert.Equal(expected, result.Error.Message);        
     }
 
     [Theory]
