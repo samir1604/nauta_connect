@@ -1,4 +1,5 @@
-﻿using HtmlAgilityPack;
+﻿using ConnectionManager.Result;
+using HtmlAgilityPack;
 using NautaManager.Contracts;
 using System.Text.RegularExpressions;
 
@@ -6,7 +7,7 @@ namespace NautaManager;
 
 public class NautaDataParser : IDataParser
 {
-    public Dictionary<string, string> ParseSessionFieldFromForm(string html)
+    public Result<Dictionary<string, string>> ParseSessionFieldFromForm(string html)
     {
         Dictionary<string, string> fields = new(StringComparer.OrdinalIgnoreCase);
 
@@ -14,6 +15,10 @@ public class NautaDataParser : IDataParser
         htmlDoc.LoadHtml(html);
 
         var nodes = htmlDoc.DocumentNode.SelectNodes($"//input[@type='hidden' and @name]");
+        if (nodes == null) 
+            return Result<Dictionary<string, string>>.Failure(
+                new Failure(ErrorType.ParserError, "Datos insuci"));
+
         if (nodes != null)
         {
             foreach (var node in nodes)
@@ -23,33 +28,39 @@ public class NautaDataParser : IDataParser
                 if (!string.IsNullOrEmpty(name))
                     fields.Add(name, value);
             }
-        }
+        }        
 
-        return fields;
+        return Result.Success(fields);
     }
 
-    public Dictionary<string, string> ParseSessionFieldFromJs(string html)
+    public Result<Dictionary<string, string>> ParseSessionFieldFromJs(string html)
+    {
+        return IsDocumentCleanFromJsAlert(html)
+            .Bind(() => ExtractSessionFields(html)); 
+    }
+
+    private static Result<Dictionary<string, string>> ExtractSessionFields(string html)
     {
         Dictionary<string, string> fields = new(StringComparer.OrdinalIgnoreCase);
-        
+
         var attributeUUID = ExtractValueFromJs(html, NautaServiceKeys.ATTRIBUTE_UUIDKey);
-        var csrfhw = ExtractValueFromJs(html, NautaServiceKeys.CSRFHWKey);        
+        var csrfhw = ExtractValueFromJs(html, NautaServiceKeys.CSRFHWKey);
         var loggerId = ExtractValueFromJs(html, NautaServiceKeys.LOGGERIDKey);
         var username = ExtractValueFromJs(html, NautaServiceKeys.USERNAMEKey);
-        
+
         if (!string.IsNullOrEmpty(attributeUUID))
             fields[NautaServiceKeys.ATTRIBUTE_UUIDKey] = attributeUUID;
         if (!string.IsNullOrEmpty(csrfhw))
-            fields[NautaServiceKeys.CSRFHWKey] = csrfhw;        
+            fields[NautaServiceKeys.CSRFHWKey] = csrfhw;
         if (!string.IsNullOrEmpty(loggerId))
             fields[NautaServiceKeys.LOGGERIDKey] = loggerId;
         if (!string.IsNullOrEmpty(username))
             fields[NautaServiceKeys.USERNAMEKey] = username;
 
-        return fields;
+        return Result.Success(fields);
     }
 
-    public string? ExtractAlertMessageFromJs(string html)
+    public Result IsDocumentCleanFromJsAlert(string html)
     {
         var doc = new HtmlDocument();
         doc.LoadHtml(html);
@@ -61,14 +72,20 @@ public class NautaDataParser : IDataParser
             foreach (var node in scriptNodes)
             {
                 string scriptContent = node.InnerText;
-                var match = Regex.Match(scriptContent, @"alert\s*\(\s*['""](?<message>.*?)['""]\s*\)", RegexOptions.Singleline);
+                var match = Regex.Match(scriptContent, @"alert\s*\(\s*['""](?<message>.*?)['""]\s*\)",
+                    RegexOptions.Singleline);
 
-                if (match.Success) return match.Groups["message"].Value;
-
+                if (match.Success)
+                {
+                    var alertContent = match.Groups["message"].Value;
+                    var errorType =  alertContent.Contains("saldo") ? ErrorType.NoBalance :
+                        alertContent.Contains("usuario") ? ErrorType.InvalidCredentials : ErrorType.UnexpectedResponse;
+                    return Result.Failure(new Failure(errorType, alertContent));
+                }
             }
         }
-
-        return null;
+        
+        return Result.Success();
     }
 
     public bool TryParseConnectionTime(string timeStr, out TimeSpan interval)

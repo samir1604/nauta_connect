@@ -74,7 +74,7 @@ public class NautaDataParserTest
     public void ExtractAlertMessage_ShouldWork_WithDifferentQuotes(string html, string expected)
     {
         // ACT
-        var result = _sut.ExtractAlertMessageFromJs(html);
+        var result = NautaDataParser.IsDocumentCleanFromJsAlert(html);
 
         // ASSERT
         Assert.Equal(expected, result);
