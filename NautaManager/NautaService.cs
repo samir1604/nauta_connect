@@ -38,8 +38,8 @@ public class NautaService : INautaService
                 if (fields.ContainsKey(NautaServiceKeys.CSRFHWKey))
                     return Result.Success(fields);
 
-                return Result<Dictionary<string, string>>.Failure(
-                    new Failure(ErrorType.ParserError, "No se detecto el portal de ETECSA"));
+                return ServiceFailures.ParseError<Dictionary<string, string>>(
+                    "No se detecto el portal de ETECSA");                
             }).Fold(fields => 
             {
                 _sessionFields = fields;
@@ -151,9 +151,9 @@ public class NautaService : INautaService
     {
         if (response.RawContent.Contains("SUCCESS"))
             return Result.Success();
-        return Result.Failure(new Failure(
-            ErrorType.UnexpectedResponse, 
-            "Error al cerrar sesión. Intente de nuevo."));
+
+        return ServiceFailures.UnexpectedResponse(
+            "Error al cerrar sesión. Intente de nuevo.");
     }
 
     private static Result<HttpResponse> EnsureLoginRedirect(HttpResponse response)
@@ -161,9 +161,8 @@ public class NautaService : INautaService
         if (response.UrlRedirect.Contains("online.do"))
             return Result.Success(response);
 
-        return Result<HttpResponse>.Failure(new Failure(
-            ErrorType.InvalidCredentials,
-            "No se pudo establecer la conexión. Verifique sus crendenciales"));
+        return ServiceFailures.InvalidCredentials<HttpResponse>(
+            "No se pudo establecer la conexión. Verifique sus crendenciales");
     }
 
     private Result<TimeSpan> ProcessRemainginTimeResponse(string? rawContent)
@@ -173,8 +172,8 @@ public class NautaService : INautaService
                 rawContent.Trim(), out TimeSpan remaining))
             return Result.Success(remaining);
 
-        return Result<TimeSpan>.Failure(new Failure(
-            ErrorType.SessionExpired, "La sesión ha expirado por inactividad."));
+        return ServiceFailures.SessionExpired<TimeSpan>(
+            "La sesión ha expirado por inactividad.");
     }
 
     private static Dictionary<string, string> CreateLogoOutDataRequest(

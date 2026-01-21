@@ -1,4 +1,5 @@
-﻿using NautaManager;
+﻿using ConnectionManager.Result;
+using NautaManager;
 
 namespace NautaConnect.Tests.NautaManager.Tests;
 
@@ -66,7 +67,7 @@ public class NautaDataParserTest
     }
 
     [Theory]
-    [InlineData("<script>alert('Error 1');</script>", "Error1")]
+    [InlineData("<script>alert('Error 1');</script>", "Error 1")]
     [InlineData("<script>alert(\"Error 2\");</script>", "Error 2")]
     public void ExtractAlertMessage_ShouldWork_WithDifferentQuotes(string html, string expected)
     {
@@ -92,5 +93,64 @@ public class NautaDataParserTest
         Assert.Equal(h, (int)result.TotalHours);
         Assert.Equal(m, result.Minutes);
         Assert.Equal(s, result.Seconds);
+    }
+
+    [Fact]
+    public void ParseSessionFieldFromJs_Should_StopEarly_WhenAlertIsFound()
+    {
+        // --- ARRANGE ---
+        // HTML que tiene un ALERT (Error) y luego datos que parecerían válidos
+        string html = "<script>alert('Su cuenta ha expirado');</script> var ATTRIBUTE_UUID=123;";
+
+        // --- ACT ---
+        var result = _sut.ParseSessionFieldFromJs(html);
+
+        // --- ASSERT ---
+        Assert.True(result.IsFailure);
+        Assert.Equal(ErrorType.UnexpectedResponse, result.Error.Type);
+        Assert.Equal("Su cuenta ha expirado", result.Error.Message);
+
+        // Verificamos que NO se intentó parsear el UUID (el resultado es el del Alert)
+        Assert.Throws<InvalidOperationException>(() => result.Value);
+    }
+
+    [Fact]
+    public void ParseSessionFieldFromJs_Should_CompleteFlow_WhenNoAlertIsPresent()
+    {
+        // --- ARRANGE ---
+        string html = "var ATTRIBUTE_UUID=ABC123XYZ; var CSRFHW=987654;";
+
+        // --- ACT ---
+        var result = _sut.ParseSessionFieldFromJs(html);
+
+        // --- ASSERT ---
+        Assert.True(result.IsSuccess);
+        Assert.Equal("ABC123XYZ", result.Value[NautaServiceKeys.ATTRIBUTE_UUIDKey]);
+        Assert.Equal("987654", result.Value[NautaServiceKeys.CSRFHWKey]);
+    }
+
+    [Theory]
+    [InlineData("var ATTRIBUTE_UUID=;")] // Llave sin valor
+    [InlineData("var CSRFHW ;")]         // Llave sin el signo igual
+    [InlineData("var loggerId=")]        // Final de cadena abrupto
+    [InlineData("totalmente_otro_texto")] // No hay rastro de las llaves esperadas
+    public void ParseSessionFieldFromJs_ShouldReturnParserError_WhenJsIsMalformed(string malformedJs)
+    {
+        // --- ACT ---
+        // Ejecutamos el flujo completo que usa el Bind
+        var result = _sut.ParseSessionFieldFromJs(malformedJs);
+
+        // --- ASSERT ---
+        // 1. El resultado debe ser fallo
+        Assert.True(result.IsFailure);
+
+        // 2. El tipo de error debe ser ParserError
+        Assert.Equal(ErrorType.ParserError, result.Error.Type);
+
+        // 3. El mensaje debe ser descriptivo
+        Assert.Contains("No se pudo extraer", result.Error.Message);
+
+        // 4. Verificamos el blindaje: acceder al Value debe lanzar excepción
+        Assert.Throws<InvalidOperationException>(() => result.Value);
     }
 }

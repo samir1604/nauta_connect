@@ -338,6 +338,53 @@ public class HttpConnectionTests
         Assert.Equal("Value123", capturedHeaders.GetValues("X-Custom-Header").First());
     }
 
+    [Fact]
+    public async Task Get_ShouldReturnTimeoutError_WhenServerIsTooSlow()
+    {
+        // --- ARRANGE ---
+        // Simulamos un timeout sin que el CancellationToken del usuario se haya disparado
+        SetupMockResponse(() => {
+            throw new TaskCanceledException("HttpClient.Timeout expired");
+        });
+
+        // --- ACT ---
+        var result = await _sut.Get(testUrl);
+
+        // --- ASSERT ---
+        Assert.True(result.IsFailure);
+        Assert.Equal(ErrorType.NetworkError, result.Error.Type);
+        Assert.Contains("lenta", result.Error.Message); // "Conexión lenta"
+    }
+
+    [Fact]
+    public void Result_ShouldProtectValueAccess_OnFailure()
+    {
+        // --- ARRANGE ---
+        var failure = Result<string>.Failure(new Failure(ErrorType.ParserError, "Test"));
+
+        // --- ACT & ASSERT ---
+        // Verificamos que nuestro "blindaje" en la propiedad Value funcione
+        Assert.Throws<InvalidOperationException>(() => failure.Value);
+    }
+
+    [Fact]
+    public async Task HandleException_ShouldIdentifyWifiProblem_ViaSocketError()
+    {
+        // --- ARRANGE ---
+        // Simulamos un error de DNS (HostNotFound) que ocurre cuando no hay red
+        var socketEx = new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.HostNotFound);
+        var httpEx = new HttpRequestException("Error", socketEx);
+
+        SetupMockResponse(() => { throw httpEx; });
+
+        // --- ACT ---
+        var result = await _sut.Get(testUrl);
+
+        // --- ASSERT ---
+        Assert.True(result.IsFailure);
+        Assert.Contains("Wi-Fi", result.Error.Message);
+    }
+
     private IReturnsResult<HttpMessageHandler> SetupMockResponse(Func<HttpResponseMessage> response)
     {
         return _handlerMock

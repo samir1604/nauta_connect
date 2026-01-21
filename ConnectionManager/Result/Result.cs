@@ -13,9 +13,9 @@ public enum ErrorType
 public record Failure(ErrorType Type, string Message, string Details = "");
 
 public class Result<T> : Result
-{
+{    
     private readonly T? _value;
-
+    
     public T Value => IsSuccess
         ? _value!
         : throw new InvalidOperationException(
@@ -28,7 +28,7 @@ public class Result<T> : Result
 }
 
 public class Result
-{
+{   
     public bool IsSuccess { get; }
     public bool IsFailure => !IsSuccess;
     public Failure Error { get; }
@@ -41,7 +41,7 @@ public class Result
             throw new InvalidOperationException("Un resultado fallido debe tener un error.");
 
         IsSuccess = isSuccess;
-        Error = error!;
+        Error = error!;        
     }
 
     public static Result Success() => new(true);

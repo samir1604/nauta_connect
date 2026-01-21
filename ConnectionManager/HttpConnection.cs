@@ -5,6 +5,7 @@ using ConnectionManager.Result;
 using Polly;
 using Polly.Retry;
 using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 
 namespace ConnectionManager;
@@ -76,13 +77,11 @@ public class HttpConnection : IHttpConnection
                     
                 }, ct);
 
-            if (!response.IsSuccessStatusCode)            
-                return Result<HttpResponse>.Failure(new Failure(
-                    ErrorType.UnexpectedResponse,
+            if (!response.IsSuccessStatusCode)
+                return HttpFailures.UnexpectedResponse<HttpResponse>(
                     "El servidor de ETECSA está devolviendo un error técnico.",
-                    $"Status: {(int)response.StatusCode}"));
+                    $"Estado: {(int)response.StatusCode}");
             
-
             var processed = await ProcessResponse(response, url);
             return Result<HttpResponse>.Success(processed);
         }        
@@ -129,22 +128,25 @@ public class HttpConnection : IHttpConnection
         return ex switch
         {
             OperationCanceledException or TaskCanceledException when ct.IsCancellationRequested =>
-                Result<HttpResponse>.Failure(new Failure(
-                    ErrorType.NetworkError,
-                    "Operación cancelada por el usuario.")),
+                HttpFailures.NetworkError<HttpResponse>(
+                    "Operación cancelada por el usuario."),
             OperationCanceledException or TaskCanceledException =>
-                Result<HttpResponse>.Failure(new Failure(
-                    ErrorType.NetworkError,
-                    "Tiempo de espera agotado. La conexión es muy lenta.")),
-            HttpRequestException hrex when hrex.Message.Contains("getaddrinfo") || 
-                                           hrex.Message.Contains("connection refused") =>
-                Result<HttpResponse>.Failure(new Failure(
-                    ErrorType.NetworkError,
-                    "No se pudo encontrar el portal. Verifica que estás conectado a la red WIFI de ETECSA.")),
-            _ => Result<HttpResponse>.Failure(new Failure(
-                    ErrorType.UnexpectedResponse,
-                    "Ocurrió un error inesperado al intentar comunicar con el servidor.",
-            ex.Message))
+                HttpFailures.NetworkError<HttpResponse>(
+                    "Tiempo de espera agotado. La conexión es muy lenta."),
+            HttpRequestException hrex when hrex.InnerException is SocketException sockEx =>
+                sockEx.SocketErrorCode switch
+                {
+                    SocketError.HostNotFound =>
+                        HttpFailures.NetworkError<HttpResponse>(
+                            "No se encuentra el portal. Verifica tu conexión Wi-Fi."),
+                    SocketError.ConnectionRefused =>
+                    HttpFailures.NetworkError<HttpResponse>(
+                            "El portal de ETECSA rechazó la conexión."),
+                    _ => HttpFailures.NetworkError<HttpResponse>(
+                            $"Error de red: {sockEx.SocketErrorCode}"),
+                },
+            _ => HttpFailures.UnexpectedResponse<HttpResponse>(
+                    "Ocurrió un error inesperado al intentar comunicar con el servidor.")
         };
     }
 }

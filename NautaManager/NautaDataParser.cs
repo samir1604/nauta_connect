@@ -5,8 +5,14 @@ using System.Text.RegularExpressions;
 
 namespace NautaManager;
 
-public class NautaDataParser : IDataParser
+public partial class NautaDataParser : IDataParser
 {
+    [GeneratedRegex(@"alert\s*\(\s*['""](?<message>.*?)['""]\s*\)", RegexOptions.Singleline)]
+    private static partial Regex AlertRegex();
+
+    [GeneratedRegex(@"(?<key>[^&""\s'=;]+)=(?<value>[^&""\s';]+)", RegexOptions.Multiline)]
+    private static partial Regex SessionFieldsRegex();
+
     public Result<Dictionary<string, string>> ParseSessionFieldFromForm(string html)
     {
         Dictionary<string, string> fields = new(StringComparer.OrdinalIgnoreCase);
@@ -16,8 +22,8 @@ public class NautaDataParser : IDataParser
 
         var nodes = htmlDoc.DocumentNode.SelectNodes($"//input[@type='hidden' and @name]");
         if (nodes == null)
-            return Result<Dictionary<string, string>>.Failure(
-                new Failure(ErrorType.ParserError, "Datos insuci"));
+            return ServiceFailures.ParseError<Dictionary<string, string>>(
+                "Datos insuficientes para establecer la conexión");
 
         if (nodes != null)
         {
@@ -44,6 +50,11 @@ public class NautaDataParser : IDataParser
         Dictionary<string, string> fields = new(StringComparer.OrdinalIgnoreCase);
 
         var attributeUUID = ExtractValueFromJs(html, NautaServiceKeys.ATTRIBUTE_UUIDKey);
+
+        if (string.IsNullOrEmpty(attributeUUID))
+            return ServiceFailures.ParseError<Dictionary<string, string>>(
+                "No se pudo extraer la informacion");            
+
         var csrfhw = ExtractValueFromJs(html, NautaServiceKeys.CSRFHWKey);
         var loggerId = ExtractValueFromJs(html, NautaServiceKeys.LOGGERIDKey);
         var username = ExtractValueFromJs(html, NautaServiceKeys.USERNAMEKey);
@@ -72,8 +83,8 @@ public class NautaDataParser : IDataParser
             foreach (var node in scriptNodes)
             {
                 string scriptContent = node.InnerText;
-                var match = Regex.Match(scriptContent, @"alert\s*\(\s*['""](?<message>.*?)['""]\s*\)",
-                    RegexOptions.Singleline);
+                
+                var match = AlertRegex().Match(scriptContent);
 
                 if (match.Success)
                 {
@@ -87,13 +98,15 @@ public class NautaDataParser : IDataParser
         return Result.Success();
     }
 
-    private static ErrorType MapAlertToErrorType(string content) =>
-        content switch
-        {
-            "saldo" => ErrorType.NoBalance,
-            "usuario" => ErrorType.InvalidCredentials,
-            _ => ErrorType.UnexpectedResponse
-        };
+    private static ErrorType MapAlertToErrorType(string content)
+    {
+        string lowerContent = content.ToLower();
+        if (lowerContent.Contains("saldo")) return ErrorType.NoBalance;
+        if (lowerContent.Contains("usuario") || lowerContent.Contains("contraseña"))
+            return ErrorType.InvalidCredentials;
+
+        return ErrorType.UnexpectedResponse;
+    }   
 
     public bool TryParseConnectionTime(string timeStr, out TimeSpan interval)
     {
@@ -118,7 +131,18 @@ public class NautaDataParser : IDataParser
 
     private static string? ExtractValueFromJs(string html, string key)
     {
-        var match = Regex.Match(html, $@"{key}=([^&""\s']+)");
-        return match.Success ? match.Groups[1].Value : null;
-    }    
+        var matches = SessionFieldsRegex().Matches(html);
+
+        foreach (Match match in matches)
+        {
+            string foundKey = match.Groups["key"].Value.Trim();
+            string foundValue = match.Groups["value"].Value.Trim();
+
+            if (foundKey.Equals(key, StringComparison.OrdinalIgnoreCase))
+            {                
+                return string.IsNullOrWhiteSpace(foundValue) ? null : foundValue;
+            }
+        }
+        return null;
+    }
 }
