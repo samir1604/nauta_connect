@@ -104,6 +104,42 @@ public class NautaServiceTests
     }
 
     [Fact]
+    public async Task LoginAsync_ShouldReturnTrue_WithRealEtecsaFormat()
+    {
+        // Arrange
+        SetupMockGetResponse(() => Result.Success(new HttpResponse
+        {
+            RawContent = "<input type='hidden' name='CSRFHW' value='inicial'/>"
+        }));
+
+        // Formato EXACTO del HTML real
+        var successHtml = @"var urlParam = ""ATTRIBUTE_UUID=043E25F746061CF85F147D59ECB9960C&CSRFHW=be0d60f382c4a393caa36979b44c3622""
+                     + ""&wlanuserip=10.227.53.40""
+                     + ""&loggerId=20260121163024923+samir1604@nauta.com.cu""
+                     + ""&username=samir1604@nauta.com.cu"";";
+
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
+        {
+            RawContent = successHtml,
+            UrlRedirect = "https://secure.etecsa.net:8443/online.do"
+        }));
+
+        // Act
+        var result = await _sut.LoginAsync("user", "pass");
+
+        // Assert
+        //Assert.True(result, $"Fallo: {GetPrivateField<Failure>(_sut, "_lastError")?.Message}");
+        Assert.True(result);
+        var fields = GetPrivateField<Dictionary<string, string>>(_sut, "_sessionFields");
+
+        Assert.NotNull(fields);
+        Assert.Equal("043E25F746061CF85F147D59ECB9960C", fields[NautaServiceKeys.ATTRIBUTE_UUIDKey]);
+        Assert.Equal("be0d60f382c4a393caa36979b44c3622", fields[NautaServiceKeys.CSRFHWKey]);
+        Assert.Equal("20260121163024923+samir1604@nauta.com.cu", fields[NautaServiceKeys.LOGGERIDKey]);
+        Assert.Equal("samir1604@nauta.com.cu", fields[NautaServiceKeys.USERNAMEKey]);
+    }
+
+    [Fact]
     public async Task LoginAsync_ShouldTryToAvailablePortal_IfSessionFieldsAreEmpty()
     {
         // Arrange: El Get devuelve éxito para que el Login pueda continuar
@@ -279,6 +315,90 @@ public class NautaServiceTests
         ), Times.Once);
         
         Assert.True(stateChangedCalled);
+    }
+
+    [Fact]
+    public async Task LogoutAsync_ShouldNotClearSession_WhenNetworkFails()
+    {
+        // --- ARRANGE ---
+        PrePopulateSessionAsync(_sut);
+
+        // Simulamos un fallo de red humanizado que viene de HttpConnection
+        SetupMockPostResponse(() => Result<HttpResponse>.Failure(
+            new Failure(ErrorType.NetworkError, "Sin conexión")), "/LogoutServlet");
+
+        bool errorCalled = false;
+        _sut.OnErrorOccurred += (msg) => errorCalled = true;
+
+        // --- ACT ---
+        await _sut.LogoutAsync();
+
+        // --- ASSERT ---
+        // La sesión NO debe limpiarse si hubo error de red
+        Assert.True(errorCalled);
+        // Verificamos por reflexión que _sessionFields sigue teniendo datos
+        var fields = GetPrivateField<Dictionary<string, string>>(_sut, "_sessionFields");
+        Assert.NotNull(fields);
+        Assert.NotEmpty(fields);
+        Assert.True(fields.ContainsKey(NautaServiceKeys.ATTRIBUTE_UUIDKey));
+    }
+
+    
+
+    [Fact]
+    public async Task LogoutAsync_ShouldTriggerError_WhenServerReturnsAnythingButSuccess()
+    {
+        // --- ARRANGE ---
+        PrePopulateSessionAsync(_sut);
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
+        {
+            RawContent = "error_internal" // Respuesta inesperada
+        }), "/LogoutServlet");
+
+        string errorMessage = string.Empty;
+        _sut.OnErrorOccurred += (msg) => errorMessage = msg;
+
+        // --- ACT ---
+        await _sut.LogoutAsync();
+
+        // --- ASSERT ---
+        Assert.Contains("Error al cerrar sesión", errorMessage);
+    }
+
+    [Fact]
+    public async Task LogoutAsync_ShouldNotCallNetwork_WhenNoSessionExists()
+    {
+        // --- ARRANGE ---
+        // No llamamos a PrePopulate, por lo que _sessionFields está vacío
+
+        // --- ACT ---
+        await _sut.LogoutAsync();
+
+        // --- ASSERT ---
+        // Verificamos que el método Post NUNCA fue llamado
+        _connectionMock.Verify(c => c.Post(
+            It.IsAny<string>(),
+            It.IsAny<IRequestContent>(),
+            It.IsAny<Action<IRequestConfiguration>>(),
+            It.IsAny<CancellationToken>()
+        ), Times.Never);
+    }
+
+    /// <summary>
+    /// Obtiene el valor de un campo privado de un objeto para fines de prueba.
+    /// </summary>
+    private static T? GetPrivateField<T>(object obj, string fieldName)
+    {
+        var fieldInfo = obj.GetType().GetField(fieldName,
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Instance);
+
+        if (fieldInfo == null)
+        {
+            throw new ArgumentException($"El campo '{fieldName}' no fue encontrado en {obj.GetType().Name}");
+        }
+
+        return (T?)fieldInfo.GetValue(obj);
     }
 
     private IReturnsResult<IHttpConnection> SetupMockPostResponse(

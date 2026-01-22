@@ -72,7 +72,7 @@ public class NautaService : INautaService
             .BindAsync(response => _dataParser.ParseSessionFieldFromJs(response.RawContent))
             .Fold(fields => {
                 foreach (var field in fields) _sessionFields[field.Key] = field.Value;
-                _sessionFields[NautaServiceKeys.USERNAMEKey] = username;
+                //_sessionFields[NautaServiceKeys.USERNAMEKey] = username;
                 ShowStatusMessage("Conectado!");
                 ChangeConnectionState(true);
                 return true;
@@ -143,7 +143,6 @@ public class NautaService : INautaService
             }, failure => 
             {
                 ShowErrorMessage(failure.Message);
-
             });
     }
 

@@ -10,8 +10,11 @@ public partial class NautaDataParser : IDataParser
     [GeneratedRegex(@"alert\s*\(\s*['""](?<message>.*?)['""]\s*\)", RegexOptions.Singleline)]
     private static partial Regex AlertRegex();
 
-    [GeneratedRegex(@"(?<key>[^&""\s'=;]+)=(?<value>[^&""\s';]+)", RegexOptions.Multiline)]
-    private static partial Regex SessionFieldsRegex();
+    [GeneratedRegex(@"urlParam\s*=\s*[""']([^""']+)[""']", RegexOptions.Singleline)]
+    private static partial Regex UrlParamExtractorRegex();
+
+    [GeneratedRegex(@"[""']\s*\+\s*[""']", RegexOptions.Compiled)]
+    private static partial Regex StringConcatenationRegex();
 
     public Result<Dictionary<string, string>> ParseSessionFieldFromForm(string html)
     {
@@ -25,16 +28,13 @@ public partial class NautaDataParser : IDataParser
             return ServiceFailures.ParseError<Dictionary<string, string>>(
                 "Datos insuficientes para establecer la conexión");
 
-        if (nodes != null)
+        foreach (var node in nodes)
         {
-            foreach (var node in nodes)
-            {
-                string name = node.GetAttributeValue("name", "");
-                string value = node.GetAttributeValue("value", "");
-                if (!string.IsNullOrEmpty(name))
-                    fields.Add(name, value);
-            }
-        }
+            string name = node.GetAttributeValue("name", "");
+            string value = node.GetAttributeValue("value", "");
+            if (!string.IsNullOrEmpty(name))
+                fields.Add(name, value);
+        }        
 
         return Result.Success(fields);
     }
@@ -50,19 +50,18 @@ public partial class NautaDataParser : IDataParser
         Dictionary<string, string> fields = new(StringComparer.OrdinalIgnoreCase);
 
         var attributeUUID = ExtractValueFromJs(html, NautaServiceKeys.ATTRIBUTE_UUIDKey);
-
-        if (string.IsNullOrEmpty(attributeUUID))
-            return ServiceFailures.ParseError<Dictionary<string, string>>(
-                "No se pudo extraer la informacion");            
-
         var csrfhw = ExtractValueFromJs(html, NautaServiceKeys.CSRFHWKey);
+
+        if (string.IsNullOrEmpty(attributeUUID) || string.IsNullOrEmpty(csrfhw))
+            return ServiceFailures.ParseError<Dictionary<string, string>>(
+                "No se pudo extraer la informacion");
+
+        fields[NautaServiceKeys.ATTRIBUTE_UUIDKey] = attributeUUID;
+        fields[NautaServiceKeys.CSRFHWKey] = csrfhw;        
+
         var loggerId = ExtractValueFromJs(html, NautaServiceKeys.LOGGERIDKey);
         var username = ExtractValueFromJs(html, NautaServiceKeys.USERNAMEKey);
-
-        if (!string.IsNullOrEmpty(attributeUUID))
-            fields[NautaServiceKeys.ATTRIBUTE_UUIDKey] = attributeUUID;
-        if (!string.IsNullOrEmpty(csrfhw))
-            fields[NautaServiceKeys.CSRFHWKey] = csrfhw;
+            
         if (!string.IsNullOrEmpty(loggerId))
             fields[NautaServiceKeys.LOGGERIDKey] = loggerId;
         if (!string.IsNullOrEmpty(username))
@@ -131,18 +130,51 @@ public partial class NautaDataParser : IDataParser
 
     private static string? ExtractValueFromJs(string html, string key)
     {
-        var matches = SessionFieldsRegex().Matches(html);
+        // Sanitizar HTML: eliminar concatenaciones de strings y caracteres de formato
+        string sanitizedHtml = SanitizeJavaScript(html);
 
-        foreach (Match match in matches)
+        // Extraer el contenido completo de urlParam
+        var urlParamMatch = UrlParamExtractorRegex().Match(sanitizedHtml);
+
+        if (!urlParamMatch.Success)
+            return null;
+
+        string urlParamContent = urlParamMatch.Groups[1].Value;
+
+        // Buscar key=value dentro del contenido usando query string format
+        return ExtractQueryStringValue(urlParamContent, key);
+    }
+
+    private static string SanitizeJavaScript(string html)
+    {
+        // Eliminar concatenaciones de strings JavaScript (" + " y ' + ')
+        string sanitized = StringConcatenationRegex().Replace(html, "");
+
+        // Eliminar caracteres de control
+        sanitized = sanitized.Replace("\r", "")
+                             .Replace("\n", "")
+                             .Replace("\t", "");
+
+        return sanitized;
+    }
+
+    private static string? ExtractQueryStringValue(string queryString, string key)
+    {
+        // Parsear manualmente el query string (más eficiente que regex para este caso)
+        var pairs = queryString.Split('&');
+
+        foreach (var pair in pairs)
         {
-            string foundKey = match.Groups["key"].Value.Trim();
-            string foundValue = match.Groups["value"].Value.Trim();
+            var keyValue = pair.Split('=', 2); // Limitar a 2 partes en caso de = en el valor
 
-            if (foundKey.Equals(key, StringComparison.OrdinalIgnoreCase))
-            {                
-                return string.IsNullOrWhiteSpace(foundValue) ? null : foundValue;
+            if (keyValue.Length == 2 &&
+                keyValue[0].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+            {
+                string value = keyValue[1].Trim();
+                return string.IsNullOrWhiteSpace(value) ? null : value;
             }
         }
+
         return null;
     }
 }

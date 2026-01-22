@@ -118,15 +118,15 @@ public class NautaDataParserTest
     public void ParseSessionFieldFromJs_Should_CompleteFlow_WhenNoAlertIsPresent()
     {
         // --- ARRANGE ---
-        string html = "var ATTRIBUTE_UUID=ABC123XYZ; var CSRFHW=987654;";
+        string html = @"var urlParam =""ATTRIBUTE_UUID =043E25F746061CF85F147D59ECB9960C&CSRFHW=be0d60f382c4a393caa36979b44c3622""";
 
         // --- ACT ---
         var result = _sut.ParseSessionFieldFromJs(html);
 
         // --- ASSERT ---
         Assert.True(result.IsSuccess);
-        Assert.Equal("ABC123XYZ", result.Value[NautaServiceKeys.ATTRIBUTE_UUIDKey]);
-        Assert.Equal("987654", result.Value[NautaServiceKeys.CSRFHWKey]);
+        Assert.Equal("043E25F746061CF85F147D59ECB9960C", result.Value[NautaServiceKeys.ATTRIBUTE_UUIDKey]);
+        Assert.Equal("be0d60f382c4a393caa36979b44c3622", result.Value[NautaServiceKeys.CSRFHWKey]);
     }
 
     [Theory]
@@ -136,21 +136,13 @@ public class NautaDataParserTest
     [InlineData("totalmente_otro_texto")] // No hay rastro de las llaves esperadas
     public void ParseSessionFieldFromJs_ShouldReturnParserError_WhenJsIsMalformed(string malformedJs)
     {
-        // --- ACT ---
-        // Ejecutamos el flujo completo que usa el Bind
+        // --- ACT ---        
         var result = _sut.ParseSessionFieldFromJs(malformedJs);
 
-        // --- ASSERT ---
-        // 1. El resultado debe ser fallo
-        Assert.True(result.IsFailure);
-
-        // 2. El tipo de error debe ser ParserError
-        Assert.Equal(ErrorType.ParserError, result.Error.Type);
-
-        // 3. El mensaje debe ser descriptivo
-        Assert.Contains("No se pudo extraer", result.Error.Message);
-
-        // 4. Verificamos el blindaje: acceder al Value debe lanzar excepción
+        // --- ASSERT ---        
+        Assert.True(result.IsFailure);        
+        Assert.Equal(ErrorType.ParserError, result.Error.Type);        
+        Assert.Contains("No se pudo extraer", result.Error.Message);        
         Assert.Throws<InvalidOperationException>(() => result.Value);
     }
 }
