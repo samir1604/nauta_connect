@@ -1,11 +1,11 @@
 ﻿using ConnectionManager.Contracts;
 using ConnectionManager.DTO;
 using ConnectionManager.Internal;
-using HtmlAgilityPack;
+using ConnectionManager.Result;
 using Polly;
 using Polly.Retry;
 using System.Net;
-using System.Reflection.Metadata.Ecma335;
+using System.Net.Sockets;
 using System.Text.Json;
 
 namespace ConnectionManager;
@@ -43,20 +43,20 @@ public class HttpConnection : IHttpConnection
             );
     }
 
-    public async Task<HttpResponse> Get(
+    public async Task<Result<HttpResponse>> Get(
         string url, 
         Action<IRequestConfiguration>? config = null,
         CancellationToken ct = default) =>
                 await SendInternalAsync(HttpMethod.Get, url, null, config, ct);
 
-    public async Task<HttpResponse> Post(
+    public async Task<Result<HttpResponse>> Post(
         string url, 
         IRequestContent? data = null, 
         Action<IRequestConfiguration>? config = null,
         CancellationToken ct= default) =>
          await SendInternalAsync(HttpMethod.Post, url, data, config, ct);    
 
-    private async Task<HttpResponse> SendInternalAsync(
+    private async Task<Result<HttpResponse>> SendInternalAsync(
         HttpMethod method,
         string url,
         IRequestContent? content = null,
@@ -65,34 +65,33 @@ public class HttpConnection : IHttpConnection
     {
         try
         {
-            HttpResponseMessage response = await _retryPolicy.ExecuteAsync(
-                async (CancellationToken token) =>
+            HttpResponseMessage response = await _retryPolicy
+                .ExecuteAsync(async token =>
                 {
                     using var request = new HttpRequestMessage(method, url);
                     config?.Invoke(new RequestConfigurationBuilder(request));
 
-                    if (content != null)
-                    {
-                        request.Content = MapContent(content);
-                    }
+                    if (content != null) request.Content = MapContent(content);                   
 
                     return await _httpClient.SendAsync(request, token);
                     
                 }, ct);
 
-            return await ProcessResponse(response, url);
-        }
-        catch (OperationCanceledException)
-        {
-            return new HttpResponse { Status = 499, Message = "Operación cancelada o tiempo de espera agotado." };
-        }
+            if (!response.IsSuccessStatusCode)
+                return HttpFailures.UnexpectedResponse<HttpResponse>(
+                    "El servidor de ETECSA está devolviendo un error técnico.",
+                    $"Estado: {(int)response.StatusCode}");
+            
+            var processed = await ProcessResponse(response, url);
+            return Result<HttpResponse>.Success(processed);
+        }        
         catch (Exception ex)
         {
-            return HandleException(ex);
+            return HandleException(ex, ct);
         }
     }
 
-    private HttpContent MapContent(IRequestContent content) => 
+    private static HttpContent MapContent(IRequestContent content) => 
         content.Type switch
     {
         HttpContentType.Form => new FormUrlEncodedContent((Dictionary<string, string>)content.RawData),
@@ -116,8 +115,7 @@ public class HttpConnection : IHttpConnection
             .ToDictionary(k => k.Key, v => v.Value.ToArray());
 
         return new HttpResponse
-        {
-            Status = (int)response.StatusCode,
+        {            
             RawContent = rawContent,
             UrlRedirect = response.RequestMessage?.RequestUri?.ToString() ?? originalUrl,
             Headers = headers,
@@ -125,15 +123,30 @@ public class HttpConnection : IHttpConnection
         };
     }
 
-    private HttpResponse HandleException(Exception ex)
+    private static Result<HttpResponse> HandleException(Exception ex, CancellationToken ct)
     {
-        var (status, message) = ex switch
+        return ex switch
         {
-            HttpRequestException hrex => (hrex.StatusCode != null ? (int)hrex.StatusCode : 500, ex.Message),
-            TaskCanceledException => ((int)HttpStatusCode.RequestTimeout, "El servidor está tardando mucho en responder."),
-            _ => (500, "Error inesperado.")
+            OperationCanceledException or TaskCanceledException when ct.IsCancellationRequested =>
+                HttpFailures.NetworkError<HttpResponse>(
+                    "Operación cancelada por el usuario."),
+            OperationCanceledException or TaskCanceledException =>
+                HttpFailures.NetworkError<HttpResponse>(
+                    "Tiempo de espera agotado. La conexión es muy lenta."),
+            HttpRequestException hrex when hrex.InnerException is SocketException sockEx =>
+                sockEx.SocketErrorCode switch
+                {
+                    SocketError.HostNotFound =>
+                        HttpFailures.NetworkError<HttpResponse>(
+                            "No se encuentra el portal. Verifica tu conexión Wi-Fi."),
+                    SocketError.ConnectionRefused =>
+                    HttpFailures.NetworkError<HttpResponse>(
+                            "El portal de ETECSA rechazó la conexión."),
+                    _ => HttpFailures.NetworkError<HttpResponse>(
+                            $"Error de red: {sockEx.SocketErrorCode}"),
+                },
+            _ => HttpFailures.UnexpectedResponse<HttpResponse>(
+                    "Ocurrió un error inesperado al intentar comunicar con el servidor.")
         };
-
-        return new HttpResponse { Status = status, Message = message };
     }
 }

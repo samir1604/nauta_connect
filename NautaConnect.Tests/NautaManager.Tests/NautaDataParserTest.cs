@@ -1,9 +1,5 @@
-﻿using NautaManager;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using ConnectionManager.Result;
+using NautaManager;
 
 namespace NautaConnect.Tests.NautaManager.Tests;
 
@@ -38,19 +34,20 @@ public class NautaDataParserTest
 
         // --- ACT ---
         var result = parser.ParseSessionFieldFromForm(htmlContent);
+        var value = result.Value;
 
         // --- ASSERT ---
         // Verificamos que solo capturó los 11 campos 'hidden'
         // Ignorando el 'username' (text) y el 'Enviar' (button)
-        Assert.Equal(11, result.Count);
+        Assert.Equal(11, result.Value.Count);
 
         // Verificaciones de valores clave
-        Assert.Equal("10.227.108.183", result["wlanuserip"]);
-        Assert.Equal("20260114155929643", result["loggerId"]);
-        Assert.Equal("a54c4e25938d36457d64c31db31d7d23", result["CSRFHW"]);
+        Assert.Equal("10.227.108.183", value["wlanuserip"]);
+        Assert.Equal("20260114155929643", value["loggerId"]);
+        Assert.Equal("a54c4e25938d36457d64c31db31d7d23", value["CSRFHW"]);
 
         // Verificamos que NO capturó el botón Enviar aunque tenga name
-        Assert.False(result.ContainsKey("Enviar"));
+        Assert.False(value.ContainsKey("Enviar"));
     }
 
     [Fact]
@@ -61,11 +58,12 @@ public class NautaDataParserTest
 
         // ACT
         var result = _sut.ParseSessionFieldFromJs(jsContent);
+        var value = result.Value;
 
         // ASSERT
-        Assert.Equal("ABC123", result["ATTRIBUTE_UUID"]);
-        Assert.Equal("token456", result["CSRFHW"]);
-        Assert.Equal("log789", result["loggerId"]);
+        Assert.Equal("ABC123", value["ATTRIBUTE_UUID"]);
+        Assert.Equal("token456", value["CSRFHW"]);
+        Assert.Equal("log789", value["loggerId"]);
     }
 
     [Theory]
@@ -74,10 +72,11 @@ public class NautaDataParserTest
     public void ExtractAlertMessage_ShouldWork_WithDifferentQuotes(string html, string expected)
     {
         // ACT
-        var result = _sut.ExtractAlertMessageFromJs(html);
+        var result = _sut.IsDocumentCleanFromJsAlert(html);
 
         // ASSERT
-        Assert.Equal(expected, result);
+        Assert.True(result.IsFailure);   
+        Assert.Equal(expected, result.Error.Message);        
     }
 
     [Theory]
@@ -94,5 +93,56 @@ public class NautaDataParserTest
         Assert.Equal(h, (int)result.TotalHours);
         Assert.Equal(m, result.Minutes);
         Assert.Equal(s, result.Seconds);
+    }
+
+    [Fact]
+    public void ParseSessionFieldFromJs_Should_StopEarly_WhenAlertIsFound()
+    {
+        // --- ARRANGE ---
+        // HTML que tiene un ALERT (Error) y luego datos que parecerían válidos
+        string html = "<script>alert('Su cuenta ha expirado');</script> var ATTRIBUTE_UUID=123;";
+
+        // --- ACT ---
+        var result = _sut.ParseSessionFieldFromJs(html);
+
+        // --- ASSERT ---
+        Assert.True(result.IsFailure);
+        Assert.Equal(ErrorType.UnexpectedResponse, result.Error.Type);
+        Assert.Equal("Su cuenta ha expirado", result.Error.Message);
+
+        // Verificamos que NO se intentó parsear el UUID (el resultado es el del Alert)
+        Assert.Throws<InvalidOperationException>(() => result.Value);
+    }
+
+    [Fact]
+    public void ParseSessionFieldFromJs_Should_CompleteFlow_WhenNoAlertIsPresent()
+    {
+        // --- ARRANGE ---
+        string html = @"var urlParam =""ATTRIBUTE_UUID =043E25F746061CF85F147D59ECB9960C&CSRFHW=be0d60f382c4a393caa36979b44c3622""";
+
+        // --- ACT ---
+        var result = _sut.ParseSessionFieldFromJs(html);
+
+        // --- ASSERT ---
+        Assert.True(result.IsSuccess);
+        Assert.Equal("043E25F746061CF85F147D59ECB9960C", result.Value[NautaServiceKeys.ATTRIBUTE_UUIDKey]);
+        Assert.Equal("be0d60f382c4a393caa36979b44c3622", result.Value[NautaServiceKeys.CSRFHWKey]);
+    }
+
+    [Theory]
+    [InlineData("var ATTRIBUTE_UUID=;")] // Llave sin valor
+    [InlineData("var CSRFHW ;")]         // Llave sin el signo igual
+    [InlineData("var loggerId=")]        // Final de cadena abrupto
+    [InlineData("totalmente_otro_texto")] // No hay rastro de las llaves esperadas
+    public void ParseSessionFieldFromJs_ShouldReturnParserError_WhenJsIsMalformed(string malformedJs)
+    {
+        // --- ACT ---        
+        var result = _sut.ParseSessionFieldFromJs(malformedJs);
+
+        // --- ASSERT ---        
+        Assert.True(result.IsFailure);        
+        Assert.Equal(ErrorType.ParserError, result.Error.Type);        
+        Assert.Contains("No se pudo extraer", result.Error.Message);        
+        Assert.Throws<InvalidOperationException>(() => result.Value);
     }
 }

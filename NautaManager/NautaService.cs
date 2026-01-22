@@ -1,9 +1,7 @@
 ﻿using ConnectionManager.Contracts;
 using ConnectionManager.DTO;
-using HtmlAgilityPack;
 using NautaManager.Contracts;
-using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
+using ConnectionManager.Result;
 
 namespace NautaManager;
 
@@ -33,52 +31,56 @@ public class NautaService : INautaService
 
         ShowStatusMessage("Verificando acceso al portal de ETECSA");
 
-        var response = await _connection.Get(url:"/", ct: ct);
+        return await _connection.Get(url: "/", ct: ct)
+            .BindAsync(response => _dataParser.ParseSessionFieldFromForm(response.RawContent))
+            .BindAsync(fields =>
+            {
+                if (fields.ContainsKey(NautaServiceKeys.CSRFHWKey))
+                    return Result.Success(fields);
 
-        if(response.IsSuccess && 
-            !string.IsNullOrEmpty(response.RawContent))        
-            _sessionFields = _dataParser.ParseSessionFieldFromForm(response.RawContent);            
-
-        if (_sessionFields.ContainsKey(NautaServiceKeys.CSRFHWKey)) return true;
-        
-        ShowStatusMessage("No se detecto el portal de ETECSA");
-        return false;
+                return ServiceFailures.ParseError<Dictionary<string, string>>(
+                    "No se detecto el portal de ETECSA");                
+            }).Fold(fields => 
+            {
+                _sessionFields = fields;
+                return true;
+            }, 
+                failure => {
+                ShowStatusMessage(failure.Message);
+                return false;
+            });
     }    
 
     public async Task<bool> LoginAsync(
         string username, string password, CancellationToken ct = default)
     {   
         if (_sessionFields.Count == 0 && !await IsPortalAvailableAsync(ct)) return false;
-        
+
         var loginData = CreateLoginDataRequest(username, password, _sessionFields);
 
         ShowStatusMessage("Iniciando sesión...");
 
-        var response = await _connection.Post(
+        return await _connection.Post(
             "/LoginServlet",
             new FormContent(loginData),
             cfg =>
-            {                
+            {
                 cfg.SetReferer("https://secure.etecsa.net:8443/");
                 cfg.AddHeader("Origin", "https://secure.etecsa.net:8443");
-            }, ct);
-
-        if (response.IsSuccess && response.UrlRedirect.Contains("online.do")) 
-        {
-            _sessionFields[NautaServiceKeys.USERNAMEKey] = username;
-            UpdateSessionFromJavascript(response.RawContent);
-            ShowStatusMessage("Conectado!");
-            ChangeConnectionState(true);
-            return true;
-        }
-
-        var alertError = _dataParser.ExtractAlertMessageFromJs(
-                response.RawContent) 
-                    ?? "Credenciales incorrectas";
-
-        ShowErrorMessage(alertError);
-        return false;
-    }
+            }, ct)
+            .BindAsync(EnsureLoginRedirect)
+            .BindAsync(response => _dataParser.ParseSessionFieldFromJs(response.RawContent))
+            .Fold(fields => {
+                foreach (var field in fields) _sessionFields[field.Key] = field.Value;
+                //_sessionFields[NautaServiceKeys.USERNAMEKey] = username;
+                ShowStatusMessage("Conectado!");
+                ChangeConnectionState(true);
+                return true;
+            }, failure => {
+                ShowErrorMessage(failure.Message);
+                return false;
+            });        
+    }    
 
     public async Task UpdateRemainingTimeAsync(CancellationToken ct = default)
     {        
@@ -91,7 +93,7 @@ public class NautaService : INautaService
 
         var queryData = CreateRemainingTimeDataRequest(_sessionFields);
         
-        var response = await _connection.Post(
+        await _connection.Post(
             url: "/EtecsaQueryServlet",
             data: new FormContent(queryData),
             config: cfg =>
@@ -100,29 +102,15 @@ public class NautaService : INautaService
                 cfg.SetReferer($"https://secure.etecsa.net:8443/web/online.do?CSRFHW={currentCsrf}&");
                 cfg.AddHeader("Origin", "https://secure.etecsa.net:8443");
                 cfg.AddHeader("Accept", "*/*");
-            }, ct);
-        
-        if (response.IsSuccess && 
-            ProcessRemainginTimeResponse(response.RawContent) is TimeSpan remaining)
-        {   
-                ShowRemaining(remaining);
-        } else
-        {
-            _sessionFields.Clear();
-            ShowErrorMessage("La sesión ha expirado por inactividad.");
-            ChangeConnectionState(false);
-        }
-    }
-
-    private TimeSpan? ProcessRemainginTimeResponse(string? rawContent)
-    {
-        if(rawContent != null &&
-            _dataParser.TryParseConnectionTime(
-                rawContent.Trim(), out TimeSpan remaining)) {
-            return remaining; 
-        }
-        
-        return null;        
+            }, ct)
+            .BindAsync(response => ProcessRemainginTimeResponse(response.RawContent))
+            .Fold(ShowRemaining, 
+            failure => 
+            {
+                _sessionFields.Clear();                
+                ChangeConnectionState(false);
+                ShowErrorMessage(failure.Message);
+            });
     }
 
     public async Task LogoutAsync(CancellationToken ct = default)
@@ -137,7 +125,7 @@ public class NautaService : INautaService
         
         var logoutData = CreateLogoOutDataRequest(_sessionFields);
                 
-        var response = await _connection.Post(
+        await _connection.Post(
             url: "/LogoutServlet",
             data: new FormContent(logoutData),
             config: cfg =>
@@ -145,18 +133,46 @@ public class NautaService : INautaService
                 string currentCsrf = _sessionFields.GetValueOrDefault(NautaServiceKeys.CSRFHWKey, "");
                 cfg.SetReferer($"https://secure.etecsa.net:8443/web/online.do?CSRFHW={currentCsrf}&");
                 cfg.AddHeader("Origin", "https://secure.etecsa.net:8443");
-            }, ct);
-        
-        if (response.IsSuccess && (response.RawContent?.Contains("SUCCESS") ?? false))
-        {
-            _sessionFields.Clear();
-            ShowStatusMessage("Sesión cerrada.");
-            ChangeConnectionState(false);
-        }
-        else
-        {
-            ShowErrorMessage("Error al cerrar sesión. Intente de nuevo.");
-        }
+            }, ct)
+            .BindAsync(CheckCloseSessionResponse)
+            .Fold(() =>
+            {
+                _sessionFields.Clear();
+                ShowStatusMessage("Sesión cerrada.");
+                ChangeConnectionState(false);
+            }, failure => 
+            {
+                ShowErrorMessage(failure.Message);
+            });
+    }
+
+    private static Result CheckCloseSessionResponse(HttpResponse response)
+    {
+        if (response.RawContent.Contains("SUCCESS"))
+            return Result.Success();
+
+        return ServiceFailures.UnexpectedResponse(
+            "Error al cerrar sesión. Intente de nuevo.");
+    }
+
+    private static Result<HttpResponse> EnsureLoginRedirect(HttpResponse response)
+    {
+        if (response.UrlRedirect.Contains("online.do"))
+            return Result.Success(response);
+
+        return ServiceFailures.InvalidCredentials<HttpResponse>(
+            "No se pudo establecer la conexión. Verifique sus crendenciales");
+    }
+
+    private Result<TimeSpan> ProcessRemainginTimeResponse(string? rawContent)
+    {
+        if (rawContent != null &&
+            _dataParser.TryParseConnectionTime(
+                rawContent.Trim(), out TimeSpan remaining))
+            return Result.Success(remaining);
+
+        return ServiceFailures.SessionExpired<TimeSpan>(
+            "La sesión ha expirado por inactividad.");
     }
 
     private static Dictionary<string, string> CreateLogoOutDataRequest(
@@ -172,8 +188,7 @@ public class NautaService : INautaService
             { NautaServiceKeys.WLANACNAMEKey, "" },
             { NautaServiceKeys.WLANMACKey, "" },
             { "remove", "1" },
-        };
-    
+        };    
 
     private static Dictionary<string, string> CreateRemainingTimeDataRequest(
         Dictionary<string, string> actualSessionFields) => new()
@@ -208,16 +223,7 @@ public class NautaService : INautaService
             { NautaServiceKeys.CSRFHWKey, actualSessionFields.GetValueOrDefault(NautaServiceKeys.CSRFHWKey, "") },
             { NautaServiceKeys.USERNAMEKey, user },
             { NautaServiceKeys.PASSWORDKey, password },
-        };
-    
-
-    private void UpdateSessionFromJavascript(string rawContent)
-    {    
-        var fields = _dataParser.ParseSessionFieldFromJs(rawContent);
-
-        foreach (var (clave, valor) in fields)        
-            _sessionFields[clave] = valor;
-    }    
+        };       
 
     private void ShowStatusMessage(string message) =>
         OnStatusMessageChanged?.Invoke(message);

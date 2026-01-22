@@ -1,4 +1,6 @@
 ﻿using ConnectionManager.DTO;
+using ConnectionManager.Result;
+
 
 namespace ConnectionManager.Contracts
 {
@@ -6,12 +8,12 @@ namespace ConnectionManager.Contracts
     {
         event RetryNotificationHandler? OnRetryOccurred;
 
-        Task<HttpResponse> Get(
+        Task<Result<HttpResponse>> Get(
             string url,
             Action<IRequestConfiguration>? config = null,
             CancellationToken ct = default);
 
-        Task<HttpResponse> Post(
+        Task<Result<HttpResponse>> Post(
             string url,
             IRequestContent? data = null,
             Action<IRequestConfiguration>? config = null,
