@@ -1,6 +1,6 @@
-﻿using ConnectionManager.Result;
+﻿using ConnectionManager.Results;
 
-namespace NautaManager;
+namespace NautaManager.Failures;
 
 public static partial class ServiceFailures
 {
@@ -27,4 +27,16 @@ public static partial class ServiceFailures
         string details = "") =>
         Result.Failure(new Failure(
             ErrorType.UnexpectedResponse, message, details));
+
+    public static Result IOError(
+        string message = "Error en los datos de sesión.",
+        string details = "") =>
+        Result.Failure(new Failure(
+            ErrorType.IOError, message, details));
+
+    public static Result<T> IOError<T>(
+        string message = "Error en los datos de sesión.",
+        string details = "") =>
+        Result<T>.Failure(new Failure(
+            ErrorType.IOError, message, details));
 }

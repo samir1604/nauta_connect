@@ -1,4 +1,6 @@
-﻿namespace ConnectionManager.Result;
+﻿using ConnectionManager.Results;
+
+namespace ConnectionManager.Failures;
 
 public static class HttpFailures
 {

@@ -1,19 +1,12 @@
 ﻿using ConnectionManager;
 using ConnectionManager.DTO;
-using ConnectionManager.Result;
-using Microsoft.VisualStudio.TestPlatform.ObjectModel.DataCollection;
+using ConnectionManager.Results;
 using Moq;
 using Moq.Language.Flow;
 using Moq.Protected;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Net; 
-using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Text;
-using System.Threading.Tasks;
-using Xunit;
+
 
 namespace NautaConnect.Tests.ConnectionManager.Tests;
 
@@ -66,7 +59,7 @@ public class HttpConnectionTests
     public async Task Get_ShouldReturnFailure_WhenOperationIsCanceledByUser()
     {
         // Arrange
-        SetupMockResponse(async (req, ct) =>
+        SetupMockResponse((req, ct) =>
         {            
             throw new OperationCanceledException(ct);
         });

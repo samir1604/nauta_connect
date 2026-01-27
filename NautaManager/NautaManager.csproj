@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ConnectionManager\ConnectionManager.csproj" />
+    <ProjectReference Include="..\NautaCredential\NautaCredential.csproj" />
   </ItemGroup>
 
 </Project>

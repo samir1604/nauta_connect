@@ -1,9 +1,11 @@
-﻿using ConnectionManager.Result;
+﻿using ConnectionManager.Results;
 using HtmlAgilityPack;
+using NautaManager.Constants;
 using NautaManager.Contracts;
+using NautaManager.Failures;
 using System.Text.RegularExpressions;
 
-namespace NautaManager;
+namespace NautaManager.Parsers;
 
 public partial class NautaDataParser : IDataParser
 {

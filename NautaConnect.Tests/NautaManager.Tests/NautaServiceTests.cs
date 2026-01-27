@@ -1,29 +1,35 @@
 ﻿using ConnectionManager.Contracts;
 using ConnectionManager.DTO;
-using ConnectionManager.Result;
+using ConnectionManager.Results;
 using Moq;
 using Moq.Language.Flow;
-using Moq.Protected;
+using NautaCredential.Contracts;
+using NautaCredential.DTO;
 using NautaManager;
+using NautaManager.Constants;
 using NautaManager.Contracts;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using NautaManager.Models;
+using NautaManager.Parsers;
 
 namespace NautaConnect.Tests.NautaManager.Tests;
 
 public class NautaServiceTests
 {
-    private readonly Mock<IHttpConnection> _connectionMock;    
+    private readonly Mock<IHttpConnection> _connectionMock;
+    private readonly Mock<ISessionManager> _session;
+    private readonly Mock<ICredentialManager<UserCredentials>> _credentials;
+
     private readonly NautaService _sut;
 
     public NautaServiceTests()
     {
-        _connectionMock = new Mock<IHttpConnection>();        
+        _connectionMock = new Mock<IHttpConnection>(); 
+        _session = new Mock<ISessionManager>();
+        _credentials = new Mock<ICredentialManager<UserCredentials>>();
         _sut = new NautaService(
-            _connectionMock.Object, new NautaDataParser());
+            _connectionMock.Object, new NautaDataParser(),
+            _credentials.Object,
+            _session.Object);
     }
 
     [Fact]
@@ -384,6 +390,92 @@ public class NautaServiceTests
         ), Times.Never);
     }
 
+    [Fact]
+    public async Task LoginAsync_WhenSuccessful_ShouldSaveSessionToDisk()
+    {
+        // ARRANGE
+        var user = "test@nauta.com.cu";
+        var pass = "password123";
+        SetupMockGetResponse(() => Result.Success(new HttpResponse
+        {
+            RawContent = "<input type='hidden' name='CSRFHW' value='inicial'/>"
+        }));
+
+        var successHtml = "var urlParam = " +
+            "'ATTRIBUTE_UUID=UUID123&CSRFHW=token456&loggerId=log789&username=test@nauta.com.cu';";
+
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
+        {
+            UrlRedirect = "https://secure.etecsa.net:8443/online.do",
+            RawContent = successHtml
+        }), "/LoginServlet");
+
+        // ACT
+        var result = await _sut.LoginAsync(user, pass);
+
+        // ASSERT
+        Assert.True(result);
+        // Verificamos que el TapAsync llamó efectivamente al guardado en disco
+        _session.Verify(s => s.SaveSession(
+            It.Is<SessionInfo>(info => 
+            info.Username == user)), 
+            Times.Once);
+    }    
+
+    [Fact]
+    public async Task LoginAsync_WhenCredentialsAreInvalid_ShouldNotSaveSession()
+    {
+        // ARRANGE
+        var user = "usuario_erroneo@nauta.com.cu";
+        var pass = "clave_falsa";
+
+        // 1. Simular portal disponible (Paso previo necesario en tu Service)
+        SetupMockGetResponse(() => Result.Success(new HttpResponse
+        {
+            RawContent = "<input type='hidden' name='CSRFHW' value='123'/>"
+        }));
+
+        // 2. Simular respuesta de error (Redirección que NO contiene 'online.do')
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
+        {
+            UrlRedirect = "https://secure.etecsa.net:8443/login.do",
+            RawContent = "<h1>Error: Credenciales incorrectas</h1>"
+        }), "/LoginServlet");
+
+        // ACT
+        var result = await _sut.LoginAsync(user, pass);
+
+        // ASSERT
+        Assert.False(result);
+        // Verificamos que NUNCA se intentó guardar en disco
+        _session.Verify(s => s.SaveSession(It.IsAny<SessionInfo>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task LogoutAsync_WhenSuccessful_ShouldDeleteSessionFromDisk()
+    {
+        // ARRANGE
+        // Inyectamos datos en la sesión interna usando tu método de reflexión
+        PrePopulateSessionAsync(_sut);
+
+        // Simular que el servidor responde SUCCESS
+        SetupMockPostResponse(() => Result.Success(new HttpResponse
+        {
+            RawContent = "SUCCESS"
+        }), "/LogoutServlet");
+
+        // ACT
+        await _sut.LogoutAsync();
+
+        // ASSERT
+        // Verificamos que se llamó al borrado físico del archivo
+        _session.Verify(s => s.DeleteSession(), Times.Once);
+
+        // Verificamos por reflexión que la memoria interna se limpió
+        var fields = GetPrivateField<Dictionary<string, string>>(_sut, "_sessionFields");
+        Assert.Empty(fields!);
+    }
+
     /// <summary>
     /// Obtiene el valor de un campo privado de un objeto para fines de prueba.
     /// </summary>
@@ -468,5 +560,17 @@ public class NautaServiceTests
                         System.Reflection.BindingFlags.Instance);
 
         fieldInfo?.SetValue(service, fields);
+    }
+
+    private static void PrePopulateSessionWithAsync(
+        NautaService service, Dictionary<string, string> data)
+    {
+        // Usamos reflexión para acceder al campo privado '_sessionFields'
+        var fieldInfo = typeof(NautaService)
+                .GetField("_sessionFields",
+                    System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance);
+
+        fieldInfo?.SetValue(service, data);
     }
 }

@@ -3,10 +3,15 @@ using ConnectionManager;
 using ConnectionManager.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using NautaCredential;
+using NautaCredential.Contracts;
+using NautaCredential.DTO;
 using NautaManager;
 using NautaManager.Contracts;
+using NautaManager.Parsers;
+using NautaManager.Persistence;
 using System.Net;
-using System.Net.Http;
+using System.Runtime.CompilerServices;
 
 var builder = Host.CreateApplicationBuilder();
 
@@ -36,6 +41,12 @@ builder.Services.AddHttpClient<IHttpConnection, HttpConnection>(client =>
 });
 builder.Services.AddSingleton<NautaService>();
 builder.Services.AddSingleton<IDataParser, NautaDataParser>();
+builder.Services.AddSingleton<ISessionManager, SessionManager>();
+if(OperatingSystem.IsWindows())
+{    
+    builder.Services.AddSingleton<ICredentialManager<UserCredentials>, NautaCredentialManager>();
+}
+
 
 using IHost host = builder.Build();
 
