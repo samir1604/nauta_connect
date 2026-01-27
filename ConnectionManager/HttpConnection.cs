@@ -1,7 +1,8 @@
 ﻿using ConnectionManager.Contracts;
 using ConnectionManager.DTO;
+using ConnectionManager.Failures;
 using ConnectionManager.Internal;
-using ConnectionManager.Result;
+using ConnectionManager.Results;
 using Polly;
 using Polly.Retry;
 using System.Net;

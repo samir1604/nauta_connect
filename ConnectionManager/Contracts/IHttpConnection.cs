@@ -1,5 +1,5 @@
 ﻿using ConnectionManager.DTO;
-using ConnectionManager.Result;
+using ConnectionManager.Results;
 
 
 namespace ConnectionManager.Contracts

@@ -1,4 +1,4 @@
-﻿namespace ConnectionManager.Result;
+﻿namespace ConnectionManager.Results;
 
 public enum ErrorType
 {
@@ -7,7 +7,8 @@ public enum ErrorType
     NoBalance,          
     SessionExpired,     
     ParserError,        
-    UnexpectedResponse
+    UnexpectedResponse,
+    IOError
 }
 
 public record Failure(ErrorType Type, string Message, string Details = "");

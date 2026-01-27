@@ -1,4 +1,4 @@
-﻿using ConnectionManager.Result;
+﻿using ConnectionManager.Results;
 using System;
 using System.Collections.Generic;
 using System.Linq;

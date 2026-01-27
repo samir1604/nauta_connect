@@ -1,7 +1,14 @@
 ﻿using ConnectionManager.Contracts;
 using ConnectionManager.DTO;
+using ConnectionManager.Results;
+using NautaManager.Constants;
 using NautaManager.Contracts;
-using ConnectionManager.Result;
+using NautaManager.Failures;
+using NautaManager.Models;
+using NautaManager.Persistence;
+using NautaCredential.Contracts;
+using NautaCredential.DTO;
+
 
 namespace NautaManager;
 
@@ -9,6 +16,9 @@ public class NautaService : INautaService
 {
     private readonly IHttpConnection _connection;
     private readonly IDataParser _dataParser;
+    private readonly ICredentialManager<UserCredentials> _credential;
+    private readonly ISessionManager _session;
+
     private Dictionary<string, string> _sessionFields = [];
 
     public event Action<string>? OnStatusMessageChanged;
@@ -18,10 +28,16 @@ public class NautaService : INautaService
     public event Action<bool>? OnConnectionStateChanged;
 
     public NautaService(
-        IHttpConnection connection, IDataParser dataParser)
+        IHttpConnection connection, 
+        IDataParser dataParser,
+        ICredentialManager<UserCredentials> credentialManager,
+        ISessionManager sessionManager)
     {
         _connection = connection;   
         _dataParser = dataParser;
+        _credential = credentialManager;
+        _session = sessionManager;
+
         _connection.OnRetryOccurred += Connection_OnRetryOccurred;
     }   
 
@@ -70,9 +86,19 @@ public class NautaService : INautaService
             }, ct)
             .BindAsync(EnsureLoginRedirect)
             .BindAsync(response => _dataParser.ParseSessionFieldFromJs(response.RawContent))
-            .Fold(fields => {
+            .TapAsync(async fields => 
+            {
                 foreach (var field in fields) _sessionFields[field.Key] = field.Value;
-                //_sessionFields[NautaServiceKeys.USERNAMEKey] = username;
+                await _session.SaveSession(new SessionInfo
+                {
+                    Username = username,
+                    AttributeUUID = fields.GetValueOrDefault(NautaServiceKeys.ATTRIBUTE_UUIDKey, ""),
+                    CsrfHw = fields.GetValueOrDefault(NautaServiceKeys.CSRFHWKey, ""),
+                    LoggerId = fields.GetValueOrDefault(NautaServiceKeys.LOGGERIDKey, ""),
+                    LoginTime = DateTime.Now
+                });
+            })
+            .Fold(_ => {                                
                 ShowStatusMessage("Conectado!");
                 ChangeConnectionState(true);
                 return true;
@@ -134,10 +160,14 @@ public class NautaService : INautaService
                 cfg.SetReferer($"https://secure.etecsa.net:8443/web/online.do?CSRFHW={currentCsrf}&");
                 cfg.AddHeader("Origin", "https://secure.etecsa.net:8443");
             }, ct)
-            .BindAsync(CheckCloseSessionResponse)
-            .Fold(() =>
+            .BindAsync(CheckCloseSessionResponse)   
+            .TapAsync(() =>
             {
                 _sessionFields.Clear();
+                _session.DeleteSession();
+            })
+            .Fold(() =>
+            {                
                 ShowStatusMessage("Sesión cerrada.");
                 ChangeConnectionState(false);
             }, failure => 
@@ -145,6 +175,24 @@ public class NautaService : INautaService
                 ShowErrorMessage(failure.Message);
             });
     }
+
+    public async Task<bool> TryRestoreSessionAsync()
+    {
+        return await _session.GetActiveSession()
+            .Fold(saved => {
+                if (saved == null) return false;
+
+                _sessionFields[NautaServiceKeys.USERNAMEKey] = saved.Username;
+                _sessionFields[NautaServiceKeys.ATTRIBUTE_UUIDKey] = saved.AttributeUUID;
+                _sessionFields[NautaServiceKeys.CSRFHWKey] = saved.CsrfHw;
+                _sessionFields[NautaServiceKeys.LOGGERIDKey] = saved.LoggerId;
+
+                ChangeConnectionState(true);
+                return true;
+            },
+            _ => false
+        );
+    }    
 
     private static Result CheckCloseSessionResponse(HttpResponse response)
     {

@@ -1,4 +1,4 @@
-﻿namespace ConnectionManager.Result;
+﻿namespace ConnectionManager.Results;
 
 public static class ResultExtension
 {
@@ -84,5 +84,47 @@ public static class ResultExtension
             OnFailure(result.Error);
         else
             OnSuccess();
+    }
+
+    public static Result<T> Tap<T>(
+        this Result<T> result, Action<T> action)
+    {
+        if (result.IsSuccess)
+        {
+            action(result.Value);
+        }
+        return result;
+    }
+
+    public static Result Tap(
+        this Result result, Action action)
+    {
+        if (result.IsSuccess)
+        {
+            action();
+        }
+        return result;
+    }
+
+    public static async Task<Result<T>> TapAsync<T>(
+        this Task<Result<T>> resultTask, Action<T> action)
+    {
+        var result = await resultTask;
+        if (result.IsSuccess)
+        {
+            action(result.Value);
+        }
+        return result;
+    }
+
+    public static async Task<Result> TapAsync(
+        this Task<Result> resultTask, Action action)
+    {
+        var result = await resultTask;
+        if (result.IsSuccess)
+        {
+            action();
+        }
+        return result;
     }
 }

@@ -1,5 +1,6 @@
-﻿using ConnectionManager.Result;
-using NautaManager;
+﻿using ConnectionManager.Results;
+using NautaManager.Constants;
+using NautaManager.Parsers;
 
 namespace NautaConnect.Tests.NautaManager.Tests;
 

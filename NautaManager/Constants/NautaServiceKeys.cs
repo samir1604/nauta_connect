@@ -1,4 +1,4 @@
-﻿namespace NautaManager;
+﻿namespace NautaManager.Constants;
 
 public static class NautaServiceKeys
 {
