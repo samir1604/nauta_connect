@@ -1,8 +1,11 @@
 ﻿// See https://aka.ms/new-console-template for more information
+using CommandLine;
 using ConnectionManager;
 using ConnectionManager.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Nauta.Cli.Handles;
+using Nauta.Cli.LineOptions;
 using NautaCredential;
 using NautaCredential.Contracts;
 using NautaCredential.DTO;
@@ -11,7 +14,6 @@ using NautaManager.Contracts;
 using NautaManager.Parsers;
 using NautaManager.Persistence;
 using System.Net;
-using System.Runtime.CompilerServices;
 
 var builder = Host.CreateApplicationBuilder();
 
@@ -24,7 +26,7 @@ builder.Services.AddHttpClient<IHttpConnection, HttpConnection>(client =>
     client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
     client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/html"));
 }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
-{    
+{
     CookieContainer = cookieContainer,
     //Evitar que la conexión se "pudra" o quede obsoleta
     PooledConnectionLifetime = TimeSpan.FromMinutes(2),
@@ -39,15 +41,67 @@ builder.Services.AddHttpClient<IHttpConnection, HttpConnection>(client =>
         RemoteCertificateValidationCallback = (m, c, ch, e) => true
     }
 });
-builder.Services.AddSingleton<NautaService>();
+builder.Services.AddSingleton<INautaService, NautaService>();
 builder.Services.AddSingleton<IDataParser, NautaDataParser>();
 builder.Services.AddSingleton<ISessionManager, SessionManager>();
-if(OperatingSystem.IsWindows())
-{    
+if (OperatingSystem.IsWindows())
+{
     builder.Services.AddSingleton<ICredentialManager<UserCredentials>, NautaCredentialManager>();
 }
 
-
 using IHost host = builder.Build();
 
-Console.WriteLine("Haciendo prueba de conexion con etecsa");
+var nautaService = host.Services.GetRequiredService<NautaService>();
+var credentialManager = host.Services.GetRequiredService<ICredentialManager<UserCredentials>>();
+
+SetupConsoleEvents(nautaService);
+var handler = new CommandHandler(nautaService, credentialManager);
+await Parser.Default.ParseArguments<Options>(args)
+    .WithParsedAsync(handler.ExecuteOptionsAsync);
+
+await host.RunAsync();
+
+static void SetupConsoleEvents(INautaService nautaService)
+{
+    nautaService.OnStatusMessageChanged += (msg) =>
+    {
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine($"[*] {msg}");
+        Console.ResetColor();
+    };
+
+    nautaService.OnErrorOccurred += (msg) =>
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"[!] ERROR: {msg}");
+        Console.ResetColor();
+    };
+
+    nautaService.OnConnectionStateChanged += (isConnected) =>
+    {
+        if (isConnected)
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine("[+] Estado: En línea");
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("[-] Estado: Desconectado");
+        }
+        Console.ResetColor();
+    };
+
+    nautaService.OnTimeRemainingUpdated += (time) =>
+    {
+        Console.Write("Tiempo restante: ");
+
+        // Colores dinámicos según el tiempo
+        if (time.TotalMinutes < 10) Console.ForegroundColor = ConsoleColor.Red;
+        else if (time.TotalHours < 1) Console.ForegroundColor = ConsoleColor.Yellow;
+        else Console.ForegroundColor = ConsoleColor.Green;
+
+        Console.WriteLine($"{time:hh\\:mm\\:ss}");
+        Console.ResetColor();
+    };
+}
