@@ -51,15 +51,25 @@ if (OperatingSystem.IsWindows())
 
 using IHost host = builder.Build();
 
-var nautaService = host.Services.GetRequiredService<NautaService>();
-var credentialManager = host.Services.GetRequiredService<ICredentialManager<UserCredentials>>();
+var parserResult = Parser.Default.ParseArguments<Options>(args);
 
-SetupConsoleEvents(nautaService);
-var handler = new CommandHandler(nautaService, credentialManager);
 await Parser.Default.ParseArguments<Options>(args)
-    .WithParsedAsync(handler.ExecuteOptionsAsync);
+    .WithParsedAsync(async opts =>
+    {
+        if (!opts.Login && !opts.Logout && !opts.Status)
+        {
+            var helpText = CommandLine.Text.HelpText.AutoBuild(parserResult, h => h, e => e);
+            Console.WriteLine(helpText);
+            return;
+        }
+        var nautaService = host.Services.GetRequiredService<NautaService>();
+        var credentialManager = host.Services.GetRequiredService<ICredentialManager<UserCredentials>>();
 
-await host.RunAsync();
+        SetupConsoleEvents(nautaService);
+
+        var handler = new CommandHandler(nautaService, credentialManager);
+        await handler.ExecuteOptionsAsync(opts);
+    });
 
 static void SetupConsoleEvents(INautaService nautaService)
 {

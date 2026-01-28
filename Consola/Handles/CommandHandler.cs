@@ -71,7 +71,7 @@ internal class CommandHandler(
         }
     }
 
-    private string PromptInput(string message, bool isPassword = false)
+    private static string PromptInput(string message, bool isPassword = false)
     {
         Console.Write(message);
         if (!isPassword) return Console.ReadLine() ?? string.Empty;
@@ -82,7 +82,8 @@ internal class CommandHandler(
         do
         {
             key = Console.ReadKey(true);
-            if (key.Key != ConsoleKey.Backspace && key.Key != ConsoleKey.Enter)
+            if (key.Key != ConsoleKey.Backspace &&
+                    key.Key != ConsoleKey.Enter)
             {
                 pass += key.KeyChar;
                 Console.Write("*");
@@ -95,13 +96,5 @@ internal class CommandHandler(
         } while (key.Key != ConsoleKey.Enter);
         Console.WriteLine();
         return pass;
-    }
-
-
-
-    public string RequestUserFromConsole()
-    {
-        Console.Write("Introduce el usuario: ");
-        return Console.ReadLine() ?? string.Empty;
     }
 }
