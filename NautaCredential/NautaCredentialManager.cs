@@ -8,26 +8,18 @@ using System.Text.Json;
 namespace NautaCredential;
 
 [SupportedOSPlatform("windows")]
-public class NautaCredentialManager : CredentialManagerBase<UserCredentials>
+public class NautaCredentialManager() : CredentialManagerBase<UserCredentials>("nauta_user.dat")
 {
     private static readonly byte[] Entropy = "Nauta-Security-Salt-2026"u8.ToArray();
 
-    public NautaCredentialManager() : base("nauta_user.dat")
-    {
-    }
-
-    public override UserCredentials? Load()
+    public override UserCredentials? Load(string? username = null)
     {
         try
         {
-            var encripted = LoadData();
-            if (encripted == null) return null;            
-
-            var decryptedData = ProtectedData.Unprotect(
-                encripted, Entropy, DataProtectionScope.CurrentUser);
-
-            var json = Encoding.UTF8.GetString(decryptedData);
-            return JsonSerializer.Deserialize<UserCredentials>(json);
+            Vault? vault = LoadVault();
+            if(vault == null) return null;
+            string? targetUsername = username ?? vault.DefaultUsername;
+            return targetUsername == null ? null : vault.Accounts.GetValueOrDefault(targetUsername);
         }
         catch
         {
@@ -36,15 +28,65 @@ public class NautaCredentialManager : CredentialManagerBase<UserCredentials>
         }
     }
 
+    public override void Delete(string username)
+    {
+        Vault? vault = LoadVault();
+        if (vault == null || !vault.Accounts.Remove(username)) return;
+
+        if(vault.DefaultUsername == username) vault.DefaultUsername = null; 
+        SaveVault(vault);
+    }
+
+    public override void Clear()
+    {
+        ClearFile();
+    }
+
+    public override void SetDefault(string username)
+    {
+        Vault? vault = LoadVault();
+        if (vault == null || !vault.Accounts.ContainsKey(username)) return;
+        
+        vault.DefaultUsername = username;
+        SaveVault(vault);
+    }
+
+    public override (string,  IReadOnlyCollection<string>) ListCredentials()
+    {
+        Vault? vault = LoadVault();
+        if(vault == null) return (string.Empty, []);
+        
+        return (vault.DefaultUsername ?? string.Empty, vault.Accounts.Keys);
+    }
+
     public override void Save(UserCredentials credentials)
     {
-        var json = JsonSerializer.Serialize(credentials);
-        var data = Encoding.UTF8.GetBytes(json);
-
-        // Cifrado usando la cuenta de usuario actual de Windows
-        var encryptedData = ProtectedData.Protect
-            (data, Entropy, DataProtectionScope.CurrentUser);
-
-        SaveData(encryptedData);        
+        Vault vault = LoadVault() ?? new Vault();
+        vault.Accounts[credentials.Username] = credentials;
+        
+        if(string.IsNullOrEmpty(vault.DefaultUsername))
+            vault.DefaultUsername = credentials.Username;
+        
+        SaveVault(vault);
+    }
+    
+    private Vault? LoadVault()
+    {
+        try {
+            byte[]? encrypted = LoadFile();
+            if(encrypted == null) return null;
+            
+            byte[] decrypted = ProtectedData.Unprotect(
+                encrypted, Entropy, DataProtectionScope.CurrentUser);
+            return JsonSerializer.Deserialize<Vault>(Encoding.UTF8.GetString(decrypted));
+        } catch { return null; }
+    }
+    
+    private void SaveVault(Vault vault)
+    {
+        string json = JsonSerializer.Serialize(vault);
+        byte[] data = Encoding.UTF8.GetBytes(json);
+        byte[] encrypted = ProtectedData.Protect(data, Entropy, DataProtectionScope.CurrentUser);
+        SaveFile(encrypted);
     }
 }

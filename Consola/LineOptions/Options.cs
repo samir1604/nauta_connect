@@ -23,6 +23,15 @@ internal class Options
 
     [Option('r', "remember", HelpText = "Guarda las credenciales de forma cifrada si el login es exitoso.")]
     public bool Remember { get; set; }
+    
+    [Option( 'c' , "list-accounts", HelpText = "List todas las cuentas guardadas.")]
+    public bool ListAccounts { get; set; }
+    
+    [Option("remove" , HelpText = "Elimina una cuenta especifica.")]
+    public string? RemoveUser { get; set; }
+    
+    [Option( "set-default", HelpText = "Cambia la cuenta principal para el login")]
+    public string? SetDefault { get; set; }
 
     // --- Utilidades ---
     [Option('v', "verbose", HelpText = "Muestra detalles técnicos de las peticiones HTTP.")]

@@ -9,18 +9,19 @@ using NautaManager.Contracts;
 
 namespace Nauta.Cli.ConfigureParser;
 
-static internal class ConfigureCommandLineParser
+internal static class ConfigureCommandLineParser
 {
     public static async Task Configure(IHost host, string[] args)
     {
-        var parserResult = Parser.Default.ParseArguments<Options>(args);
+        ParserResult<Options>? parserResult = Parser.Default.ParseArguments<Options>(args);
 
         await Parser.Default.ParseArguments<Options>(args)
             .WithParsedAsync(async opts =>
             {
                 if (!opts.Login && !opts.Logout && !opts.Status)
                 {
-                    var helpText = CommandLine.Text.HelpText.AutoBuild(parserResult, h => h, e => e);
+                    string helpText = CommandLine.Text.HelpText.AutoBuild(
+                        parserResult, h => h, e => e);
                     Console.WriteLine(helpText);
                     return;
                 }

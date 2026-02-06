@@ -6,17 +6,42 @@ using NautaManager.Contracts;
 namespace Nauta.Cli.Handles;
 
 internal class CommandHandler(
-    INautaService nautaService,
-    ICredentialManager<UserCredentials> credentialManager)
+    INautaService service,
+    ICredentialManager<UserCredentials> credential)
 {
-    private readonly INautaService _nauta = nautaService;
-    private readonly ICredentialManager<UserCredentials> _credential = credentialManager;
-
     public async Task ExecuteOptionsAsync(Options opts)
-    {
+    {   
+        // --- GESTION DE CUENTAS --- //
+        
+        // - Listar cuentas
+        if (opts.ListAccounts)
+        {
+            ShowSavedCredentials();
+            return;
+        }
+
+        // - Eliminar un usuario
+        if (!string.IsNullOrEmpty(opts.RemoveUser))
+        {
+            credential.Delete(opts.RemoveUser);
+            Console.WriteLine($"[*] Cuenta {opts.RemoveUser} eliminada.");
+            return;
+        }
+
+        // - Establecer una cuenta como principal
+        if (!string.IsNullOrEmpty(opts.SetDefault))
+        {
+            credential.SetDefault(opts.SetDefault);
+            Console.WriteLine($"[*] {opts.SetDefault} ahora es la cuenta predeterminada.");
+            return;
+        }
+        
+        // --- CONEXION (ONLINE) --- //
+        
+        // - Restaurar una session activa
         if (opts.Status || opts.Logout)
         {
-            await _nauta.TryRestoreSessionAsync();
+            await service.TryRestoreSessionAsync();
         }
 
         if (opts.Login)
@@ -25,49 +50,71 @@ internal class CommandHandler(
         }
         else if (opts.Logout)
         {
-            await _nauta.LogoutAsync();
+            await service.LogoutAsync();
         }
         else if (opts.Status)
         {
-            await _nauta.UpdateRemainingTimeAsync();
+            await service.UpdateRemainingTimeAsync();
+        } else if (opts.ListAccounts)
+        {
+            //ShowSavedCredentials
         }
+    }
+    
+    private void ShowSavedCredentials()
+    {
+        (string defaultUsername, IReadOnlyCollection<string> credentials) = credential.ListCredentials();
+    
+        if (credentials.Count == 0) 
+        {
+            Console.WriteLine("No existe credenciales guardadas.");
+            return;
+        }
+
+        Console.WriteLine("\nCuentas registradas:");
+        Console.WriteLine("-------------------");
+
+        foreach (string username in  credentials)
+        {
+            if (username == defaultUsername)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($" [X] {username} (Principal)");
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.WriteLine($" [ ] {username}");
+            }
+        }
+        Console.WriteLine("-------------------\n");
     }
 
     private async Task HandleLoginAsync(Options opts)
     {
-        // 1. Obtener usuario (Prioridad: Parámetro > Disco > Consola)
-        string username = opts.User ?? _credential.Load()?.Username
+        string username = opts.User ?? credential.Load()?.Username
             ?? PromptInput("Introduce el usuario: ");
 
         if (string.IsNullOrEmpty(username)) return;
-
-        // 2. Obtener contraseña
+        
         string? password = opts.Password;
-
-        // Si no vino por parámetro, intentamos cargarla del disco SOLO si el usuario coincide
+        
         if (string.IsNullOrEmpty(password))
         {
-            var saved = _credential.Load();
-            if (saved != null && saved.Username == username)
-            {
+            UserCredentials? saved = credential.Load();
+            if (saved != null && saved.Username == username) 
                 password = saved.Password;
-            }
             else
-            {
-                // Si no coincide o no hay, preguntamos
                 password = PromptInput($"Introduce la contraseña para {username}: ", isPassword: true);
-            }
         }
 
         if (string.IsNullOrEmpty(password)) return;
-
-        // 3. Ejecutar Login
-        bool success = await _nauta.LoginAsync(username, password);
-
-        // 4. Recordar si se solicitó
+        
+        bool success = await service.LoginAsync(username, password);
+        
         if (success && opts.Remember)
         {
-            _credential.Save(new UserCredentials(username, password));
+            credential.Save(new UserCredentials(username, password));
         }
     }
 

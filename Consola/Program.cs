@@ -5,9 +5,9 @@ using NautaCredential.Configuration;
 using NautaManager.Configuration;
 using System.Net;
 
-var builder = Host.CreateApplicationBuilder();
+HostApplicationBuilder builder = Host.CreateApplicationBuilder();
 
-var cookieContainer = new CookieContainer();
+CookieContainer cookieContainer = new CookieContainer();
 
 builder.Services
     .AddHttpClientConfig(cookieContainer)
